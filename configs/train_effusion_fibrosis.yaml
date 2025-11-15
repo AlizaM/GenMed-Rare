@@ -1,0 +1,100 @@
+# Training configuration for Effusion vs Fibrosis classification
+
+# Experiment settings
+experiment:
+  name: "effusion_vs_fibrosis"
+  seed: 42
+  output_dir: "outputs"
+  checkpoint_dir: "outputs/checkpoints"
+  log_dir: "outputs/logs"
+
+# Data settings
+data:
+  # Input data
+  input_csv: "data/interim/filtered_data_entry.csv"
+  train_val_dir: "data/interim/train_val"
+  test_dir: "data/interim/test"
+  
+  # Output processed data
+  processed_csv: "data/processed/effusion_fibrosis_processed.csv"
+  
+  # Labels
+  label_column: "Finding Labels"
+  image_column: "Image Index"
+  class_1: "Effusion"
+  class_2: "Fibrosis"
+  
+  # Split settings
+  train_split: 0.8
+  val_split: 0.2
+  stratify: true
+  
+  # Image settings
+  img_size: 224
+  channels: 3  # RGB for pretrained models
+  normalize_mean: [0.485, 0.456, 0.406]  # ImageNet stats
+  normalize_std: [0.229, 0.224, 0.225]
+
+# Model settings
+model:
+  name: "swin_transformer"
+  variant: "base"  # base, tiny, small, large
+  pretrained: true
+  num_classes: 2  # binary classification
+  dropout: 0.1
+
+# Training settings
+training:
+  epochs: 100
+  batch_size: 16
+  num_workers: 4
+  
+  # Optimizer
+  optimizer: "adamw"
+  lr: 1e-4
+  weight_decay: 0.01
+  
+  # Learning rate scheduler
+  scheduler: "reduce_on_plateau"
+  scheduler_params:
+    mode: "min"
+    factor: 0.5
+    patience: 5
+    min_lr: 1e-7
+  
+  # Checkpointing
+  save_best_only: true
+  save_frequency: 5  # save every N epochs
+  monitor_metric: "val_loss"
+  monitor_mode: "min"
+  
+  # Early stopping
+  early_stopping: true
+  early_stopping_patience: 15
+
+# Augmentation settings
+augmentation:
+  # Training augmentations
+  train:
+    rotation_degrees: 10
+    brightness: 0.2
+    contrast: 0.2
+    gaussian_noise_std: 0.01
+    horizontal_flip: false
+    vertical_flip: false
+  
+  # Validation augmentations (only normalization)
+  val:
+    normalize_only: true
+
+# Logging settings
+logging:
+  use_tensorboard: true
+  log_interval: 10  # log every N batches
+  metrics:
+    - "loss"
+    - "accuracy"
+    - "precision"
+    - "recall"
+    - "f1_score"
+    - "auc_roc"

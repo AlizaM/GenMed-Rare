@@ -1,5 +1,5 @@
 torch>=1.13.0
-torchvision
+torchvision>=0.14.0
 numpy
 Pillow
 matplotlib
@@ -7,3 +7,5 @@ PyYAML
 tqdm
 scikit-image
 pandas
+scikit-learn
+tensorboard
