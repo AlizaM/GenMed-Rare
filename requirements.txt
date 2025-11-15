@@ -6,3 +6,4 @@ matplotlib
 PyYAML
 tqdm
 scikit-image
+pandas

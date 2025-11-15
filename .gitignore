@@ -22,3 +22,6 @@ outputs/
 
 # Logs
 *.log
+
+# Data files
+data/
