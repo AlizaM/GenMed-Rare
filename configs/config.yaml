@@ -1,0 +1,107 @@
+# Training Configuration for Effusion vs Fibrosis Binary Classification
+
+experiment:
+  name: "effusion_vs_fibrosis_baseline"
+  description: "Binary classification baseline without synthetic augmentation"
+  seed: 42
+
+data:
+  # Input paths
+  interim_csv: "data/interim/filtered_data_entry.csv"
+  train_val_dir: "data/interim/train_val"
+  test_dir: "data/interim/test"
+  
+  # Output paths
+  processed_dir: "data/processed/effusion_fibrosis"
+  train_csv: "train.csv"
+  val_csv: "val.csv"
+  test_csv: "test.csv"
+  
+  # Classes
+  class_positive: "Fibrosis"  # Rare class (label=1)
+  class_negative: "Effusion"  # Common class (label=0)
+  
+  # Split configuration
+  train_val_split: 0.8
+  stratified: true
+  
+  # Image configuration
+  image_size: [224, 224]  # [height, width]
+  channels: 3  # RGB (converted from grayscale)
+  
+model:
+  name: "swin_transformer"
+  variant: "swin_base_patch4_window7_224"  # Options: swin_tiny, swin_small, swin_base
+  pretrained: true
+  num_classes: 2
+  freeze_backbone: false  # Set true to only train classifier head
+  dropout: 0.1
+
+training:
+  batch_size: 32
+  num_epochs: 50
+  num_workers: 4
+  
+  # Optimizer
+  optimizer: "adamw"
+  learning_rate: 0.0001
+  weight_decay: 0.01
+  
+  # Learning rate scheduler
+  scheduler: "reduce_lr_on_plateau"
+  lr_patience: 5
+  lr_factor: 0.5
+  lr_min: 0.000001
+  
+  # Early stopping
+  early_stopping: true
+  early_stopping_patience: 10
+  early_stopping_metric: "val_loss"  # Options: val_loss, val_accuracy, val_f1
+  
+  # Checkpointing
+  save_checkpoints: true
+  checkpoint_dir: "outputs/effusion_vs_fibrosis_baseline/checkpoints"
+  save_best_only: false  # Save both best and latest
+  
+  # Logging
+  log_dir: "outputs/effusion_vs_fibrosis_baseline/logs"
+  log_interval: 10  # Log every N batches
+  
+  # Mixed precision training
+  use_amp: false  # Set true for faster training with mixed precision
+
+augmentation:
+  # Training augmentations (medical imaging safe - no flips!)
+  train:
+    rotation_degrees: 10
+    brightness: 0.2
+    contrast: 0.2
+    gaussian_noise_std: 0.01
+    
+  # Normalization (ImageNet stats for transfer learning)
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+  
+  # Validation/test (no augmentation except normalization)
+  val_test:
+    normalize_only: true
+
+metrics:
+  # Metrics to track
+  track:
+    - "accuracy"
+    - "precision"
+    - "recall"
+    - "f1"
+    - "auc_roc"
+    - "confusion_matrix"
+  
+  # Primary metric for model selection
+  primary_metric: "f1"
+  primary_mode: "max"  # max or min
+
+hardware:
+  device: "cuda"  # cuda or cpu (auto-detected if cuda available)
+  pin_memory: true
+  deterministic: true  # For reproducibility

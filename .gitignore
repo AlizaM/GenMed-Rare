@@ -24,4 +24,4 @@ outputs/
 *.log
 
 # Data files
-data/
+*.png

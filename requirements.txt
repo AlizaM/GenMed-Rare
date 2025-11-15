@@ -7,3 +7,6 @@ PyYAML
 tqdm
 scikit-image
 pandas
+scikit-learn
+timm
+tensorboard
