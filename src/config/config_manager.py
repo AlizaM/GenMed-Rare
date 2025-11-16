@@ -146,6 +146,11 @@ class Config:
         if self.hardware.device == "cuda" and not torch.cuda.is_available():
             print("CUDA requested but not available. Falling back to CPU.")
             self.hardware.device = "cpu"
+        
+        # Auto-adjust pin_memory based on device availability
+        # pin_memory only makes sense when using CUDA
+        if self.hardware.device == "cpu":
+            self.hardware.pin_memory = False
     
     def create_dirs(self):
         """Create necessary output directories."""

@@ -1,0 +1,107 @@
+# Test Configuration - Small dataset for quick training validation
+
+experiment:
+  name: "test_training_pipeline"
+  description: "Quick test with small dataset to validate training pipeline"
+  seed: 42
+
+data:
+  # Input paths
+  interim_csv: "data/interim/filtered_data_entry.csv"
+  train_val_dir: "data/interim/train_val"
+  test_dir: "data/interim/test"
+  
+  # Output paths
+  processed_dir: "data/processed/effusion_fibrosis"
+  train_csv: "train.csv"
+  val_csv: "val.csv"
+  test_csv: "test.csv"
+  
+  # Classes
+  class_positive: "Fibrosis"  # Rare class (label=1)
+  class_negative: "Effusion"  # Common class (label=0)
+  
+  # Split configuration
+  train_val_split: 0.8
+  stratified: true
+  
+  # Image configuration
+  image_size: [224, 224]  # [height, width]
+  channels: 3  # RGB (converted from grayscale)
+  
+model:
+  name: "swin_transformer"
+  variant: "swin_tiny_patch4_window7_224"  # Smaller model for faster testing
+  pretrained: true
+  num_classes: 2
+  freeze_backbone: false
+  dropout: 0.1
+
+training:
+  batch_size: 8  # Small batch for quick iterations
+  num_epochs: 3  # Just a few epochs for testing
+  num_workers: 2  # Fewer workers for testing
+  
+  # Optimizer
+  optimizer: "adamw"
+  learning_rate: 0.0001
+  weight_decay: 0.01
+  
+  # Learning rate scheduler
+  scheduler: "reduce_lr_on_plateau"
+  lr_patience: 2
+  lr_factor: 0.5
+  lr_min: 0.000001
+  
+  # Early stopping
+  early_stopping: true
+  early_stopping_patience: 5
+  early_stopping_metric: "val_loss"
+  
+  # Checkpointing
+  save_checkpoints: true
+  checkpoint_dir: "outputs/test_training_pipeline/checkpoints"
+  save_best_only: false  # Save both best and latest
+  
+  # Logging
+  log_dir: "outputs/test_training_pipeline/logs"
+  log_interval: 5  # Log more frequently for testing
+  
+  # Mixed precision training
+  use_amp: false
+
+augmentation:
+  # Training augmentations (medical imaging safe - no flips!)
+  train:
+    rotation_degrees: 10
+    brightness: 0.2
+    contrast: 0.2
+    gaussian_noise_std: 0.01
+    
+  # Normalization (ImageNet stats for transfer learning)
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+  
+  # Validation/test (no augmentation except normalization)
+  val_test:
+    normalize_only: true
+
+metrics:
+  # Metrics to track
+  track:
+    - "accuracy"
+    - "precision"
+    - "recall"
+    - "f1"
+    - "auc_roc"
+    - "confusion_matrix"
+  
+  # Primary metric for model selection
+  primary_metric: "f1"
+  primary_mode: "max"  # max or min
+
+hardware:
+  device: "cuda"  # cuda or cpu (auto-detected if cuda available)
+  pin_memory: true
+  deterministic: true  # For reproducibility
