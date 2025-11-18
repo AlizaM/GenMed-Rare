@@ -11,6 +11,7 @@ import math
 import os
 from pathlib import Path
 from typing import Optional
+import numpy as np
 
 import torch
 import torch.nn.functional as F
@@ -164,7 +165,7 @@ def train_loop(
     writer,
     checkpoint_dir,
 ):
-    """Main training loop."""
+    """Main training loop with enhanced metrics tracking."""
     num_epochs = config['training']['num_train_epochs']
     gradient_accumulation_steps = config['training']['gradient_accumulation_steps']
     logging_steps = config['training']['logging_steps']
@@ -172,6 +173,9 @@ def train_loop(
     validation_steps = config['training']['validation_steps']
     
     global_step = 0
+    best_loss = float('inf')
+    epoch_losses = []
+    
     progress_bar = tqdm(
         range(num_epochs * len(train_dataloader)),
         desc="Training",
@@ -180,6 +184,8 @@ def train_loop(
     
     for epoch in range(num_epochs):
         unet.train()
+        epoch_loss = 0.0
+        num_batches = 0
         
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet):
@@ -235,11 +241,16 @@ def train_loop(
                 progress_bar.update(1)
                 global_step += 1
                 
+                # Track epoch loss
+                epoch_loss += loss.detach().item()
+                num_batches += 1
+                
                 # Logging
                 if global_step % logging_steps == 0:
-                    if accelerator.is_main_process:
-                        writer.add_scalar('train/loss', loss.detach().item(), global_step)
-                        writer.add_scalar('train/lr', lr_scheduler.get_last_lr()[0], global_step)
+                    if accelerator.is_main_process and writer:
+                        writer.add_scalar('train/step_loss', loss.detach().item(), global_step)
+                        writer.add_scalar('train/learning_rate', lr_scheduler.get_last_lr()[0], global_step)
+                        writer.add_scalar('train/epoch_progress', epoch + (step / len(train_dataloader)), global_step)
                 
                 # Save checkpoint
                 if global_step % save_steps == 0:
@@ -248,7 +259,8 @@ def train_loop(
                             unet,
                             checkpoint_dir,
                             global_step,
-                            config
+                            config,
+                            epoch=epoch
                         )
                 
                 # Validation
@@ -265,39 +277,128 @@ def train_loop(
                             writer
                         )
         
-        print(f"Epoch {epoch + 1}/{num_epochs} completed. Loss: {loss.detach().item():.4f}")
+        # Calculate epoch metrics
+        avg_epoch_loss = epoch_loss / num_batches if num_batches > 0 else 0.0
+        epoch_losses.append(avg_epoch_loss)
+        
+        # Log epoch-level metrics
+        if accelerator.is_main_process and writer:
+            writer.add_scalar('train/epoch_loss', avg_epoch_loss, epoch)
+            writer.add_scalar('train/epoch_number', epoch, global_step)
+            
+            # Log loss trend (improvement over last 5 epochs)
+            if len(epoch_losses) >= 5:
+                recent_trend = sum(epoch_losses[-5:]) / 5
+                writer.add_scalar('train/loss_trend_5epoch', recent_trend, epoch)
+        
+        # Save epoch checkpoint and check if it's the best
+        is_best = avg_epoch_loss < best_loss
+        if is_best:
+            best_loss = avg_epoch_loss
+            
+        if accelerator.is_main_process:
+            save_checkpoint(
+                unet,
+                checkpoint_dir,
+                global_step,
+                config,
+                epoch=epoch,
+                is_best=is_best
+            )
+        
+        print(f"Epoch {epoch + 1}/{num_epochs} completed. Avg Loss: {avg_epoch_loss:.4f}" + 
+              (" 🌟 (Best!)" if is_best else ""))
     
     # Save final checkpoint
     if accelerator.is_main_process:
-        save_checkpoint(unet, checkpoint_dir, "final", config)
+        save_checkpoint(unet, checkpoint_dir, global_step, config, epoch=num_epochs-1, is_best=False)
     
     accelerator.end_training()
 
 
-def save_checkpoint(unet, checkpoint_dir, step, config):
-    """Save model checkpoint."""
-    save_path = checkpoint_dir / f"checkpoint-{step}"
-    save_path.mkdir(exist_ok=True)
+def save_checkpoint(unet, checkpoint_dir, step, config, epoch=None, is_best=False):
+    """Save model checkpoint with better organization."""
     
-    # Save LoRA weights
+    # Create step-based checkpoint (for resuming mid-epoch)
+    step_path = checkpoint_dir / f"checkpoint-step-{step}"
+    step_path.mkdir(exist_ok=True)
+    
     if config['model']['use_lora']:
-        unet.save_pretrained(save_path)
+        unet.save_pretrained(step_path)
     else:
-        # Save full UNet
-        unet.save_pretrained(save_path)
+        unet.save_pretrained(step_path)
     
-    print(f"Checkpoint saved to {save_path}")
+    print(f"Step checkpoint saved to {step_path}")
+    
+    # If epoch is provided, also save epoch-based checkpoint
+    if epoch is not None:
+        epoch_path = checkpoint_dir / f"checkpoint-epoch-{epoch}"
+        epoch_path.mkdir(exist_ok=True)
+        
+        if config['model']['use_lora']:
+            unet.save_pretrained(epoch_path)
+        else:
+            unet.save_pretrained(epoch_path)
+            
+        print(f"Epoch checkpoint saved to {epoch_path}")
+        
+        # Keep only last 3 epoch checkpoints to save space
+        cleanup_old_checkpoints(checkpoint_dir, "checkpoint-epoch-", keep_last=3)
+    
+    # Save as best model if specified
+    if is_best:
+        best_path = checkpoint_dir / "best_model"
+        best_path.mkdir(exist_ok=True)
+        
+        if config['model']['use_lora']:
+            unet.save_pretrained(best_path)
+        else:
+            unet.save_pretrained(best_path)
+            
+        print(f"Best model saved to {best_path}")
+
+
+def cleanup_old_checkpoints(checkpoint_dir, prefix, keep_last=3):
+    """Keep only the last N checkpoints to save disk space."""
+    import re
+    
+    checkpoints = []
+    for path in checkpoint_dir.iterdir():
+        if path.is_dir() and path.name.startswith(prefix):
+            # Extract epoch/step number
+            match = re.search(rf'{prefix}(\d+)', path.name)
+            if match:
+                num = int(match.group(1))
+                checkpoints.append((num, path))
+    
+    # Sort by number and keep only the last N
+    checkpoints.sort(key=lambda x: x[0])
+    
+    if len(checkpoints) > keep_last:
+        for _, old_path in checkpoints[:-keep_last]:
+            import shutil
+            shutil.rmtree(old_path)
+            print(f"Removed old checkpoint: {old_path}")
 
 
 @torch.no_grad()
 def validate(unet, vae, text_encoder, tokenizer, noise_scheduler, config, step, writer):
-    """Generate validation images."""
+    """Generate validation images and save them both to TensorBoard and as files."""
     print(f"\nGenerating validation images at step {step}...")
     
     unet.eval()
     
     validation_prompt = config['training']['validation_prompt']
     num_images = config['training']['num_validation_images']
+    
+    # Create validation image directory
+    validation_dir = Path(config['training'].get('validation_image_dir', 
+                                                 f"{config['training']['checkpoint_dir']}/../validation_images"))
+    validation_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create step-specific subdirectory
+    step_dir = validation_dir / f"step_{step:06d}"
+    step_dir.mkdir(exist_ok=True)
     
     # Create pipeline for generation
     pipeline = StableDiffusionPipeline(
@@ -315,15 +416,23 @@ def validate(unet, vae, text_encoder, tokenizer, noise_scheduler, config, step, 
     images = pipeline(
         validation_prompt,
         num_images_per_prompt=num_images,
-        num_inference_steps=50,
-        guidance_scale=7.5,
+        num_inference_steps=config['generation']['num_inference_steps'],
+        guidance_scale=config['generation']['guidance_scale'],
     ).images
     
-    # Log to tensorboard
+    # Save images and log to tensorboard
     for i, img in enumerate(images):
-        writer.add_image(f'validation/image_{i}', 
-                        torch.tensor(img).permute(2, 0, 1) / 255.0, 
-                        step)
+        # Save as PNG file
+        img_filename = step_dir / f"validation_image_{i:02d}.png"
+        img.save(img_filename)
+        
+        # Log to tensorboard (convert PIL to tensor)
+        img_tensor = torch.tensor(np.array(img)).permute(2, 0, 1) / 255.0
+        if writer:
+            writer.add_image(f'validation/image_{i}', img_tensor, step)
+    
+    print(f"✓ Validation images saved to: {step_dir}")
+    print(f"✓ TensorBoard: {num_images} images logged at step {step}")
     
     unet.train()
 
