@@ -1,14 +1,37 @@
+# Core ML
 torch>=1.13.0
 torchvision
 numpy
 Pillow
+
+# Visualization
 matplotlib
 seaborn
+
+# Utils
 PyYAML
 tqdm
-scikit-image
 pandas
+
+# Computer Vision & Image Processing
+scikit-image
 scikit-learn
+
+# Models
 timm
+
+# Logging
 tensorboard
+
+# Testing
 pytest
+
+# Diffusion Model Training
+diffusers>=0.25.0
+transformers>=4.36.0
+accelerate>=0.25.0
+peft>=0.7.0
+
+# Diffusion Optimizations (optional but recommended)
+bitsandbytes>=0.41.0  # For 8-bit Adam optimizer (saves memory)
+xformers>=0.0.23      # For faster attention (requires compatible PyTorch + CUDA)
