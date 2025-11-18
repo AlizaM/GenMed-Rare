@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Dict, Tuple, Optional
 from tqdm import tqdm
 import logging
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     roc_auc_score, confusion_matrix
@@ -197,6 +200,18 @@ class Trainer:
         # Mixed precision training
         self.scaler = torch.cuda.amp.GradScaler() if config.training.use_amp else None
         
+        # Training history for plotting
+        self.history = {
+            'train_loss': [],
+            'train_accuracy': [],
+            'train_f1': [],
+            'train_recall': [],
+            'val_loss': [],
+            'val_accuracy': [],
+            'val_f1': [],
+            'val_recall': []
+        }
+        
         logger.info("Trainer initialized")
     
     def _create_optimizer(self) -> torch.optim.Optimizer:
@@ -351,7 +366,7 @@ class Trainer:
         }
         
         # Save latest checkpoint
-        latest_path = self.checkpoint_dir / 'latest_checkpoint.pth'
+        latest_path = self.checkpoint_dir / f'checkpoint_{epoch}.pth'
         torch.save(checkpoint, latest_path)
         logger.info(f"Saved latest checkpoint (epoch {epoch}) to {latest_path}")
         
@@ -361,6 +376,101 @@ class Trainer:
             torch.save(checkpoint, best_path)
             logger.info(f"✓ Saved BEST checkpoint (epoch {epoch}) to {best_path}")
     
+    def save_training_graphs(self):
+        """
+        Save training graphs for loss, accuracy, and F1 score.
+        """
+        epochs = range(1, len(self.history['train_loss']) + 1)
+        
+        # Create figure with subplots
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        fig.suptitle(f'Training Progress - {self.config.experiment.name}', fontsize=16)
+        
+        # Loss plot
+        axes[0, 0].plot(epochs, self.history['train_loss'], 'b-', label='Train Loss', linewidth=2)
+        axes[0, 0].plot(epochs, self.history['val_loss'], 'r-', label='Validation Loss', linewidth=2)
+        axes[0, 0].set_title('Loss')
+        axes[0, 0].set_xlabel('Epoch')
+        axes[0, 0].set_ylabel('Loss')
+        axes[0, 0].legend()
+        axes[0, 0].grid(True, alpha=0.3)
+        
+        # Accuracy plot
+        axes[0, 1].plot(epochs, self.history['train_accuracy'], 'b-', label='Train Accuracy', linewidth=2)
+        axes[0, 1].plot(epochs, self.history['val_accuracy'], 'r-', label='Validation Accuracy', linewidth=2)
+        axes[0, 1].set_title('Accuracy')
+        axes[0, 1].set_xlabel('Epoch')
+        axes[0, 1].set_ylabel('Accuracy')
+        axes[0, 1].legend()
+        axes[0, 1].grid(True, alpha=0.3)
+        
+        # F1 Score plot
+        axes[1, 0].plot(epochs, self.history['train_f1'], 'b-', label='Train F1', linewidth=2)
+        axes[1, 0].plot(epochs, self.history['val_f1'], 'r-', label='Validation F1', linewidth=2)
+        axes[1, 0].set_title('F1 Score')
+        axes[1, 0].set_xlabel('Epoch')
+        axes[1, 0].set_ylabel('F1 Score')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
+        
+        # Recall plot
+        axes[1, 1].plot(epochs, self.history['train_recall'], 'b-', label='Train Recall', linewidth=2)
+        axes[1, 1].plot(epochs, self.history['val_recall'], 'r-', label='Validation Recall', linewidth=2)
+        axes[1, 1].set_title('Recall')
+        axes[1, 1].set_xlabel('Epoch')
+        axes[1, 1].set_ylabel('Recall')
+        axes[1, 1].legend()
+        axes[1, 1].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # Save the plot
+        graphs_path = self.checkpoint_dir / 'training_graphs.png'
+        plt.savefig(graphs_path, dpi=300, bbox_inches='tight')
+        plt.close()  # Close to free memory
+        
+        logger.info(f"Training graphs saved to {graphs_path}")
+        
+        # Also save a summary plot with just the most important metrics
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        fig.suptitle(f'Training Summary - {self.config.experiment.name}', fontsize=16)
+        
+        # Loss
+        axes[0].plot(epochs, self.history['train_loss'], 'b-', label='Train', linewidth=2)
+        axes[0].plot(epochs, self.history['val_loss'], 'r-', label='Validation', linewidth=2)
+        axes[0].set_title('Loss')
+        axes[0].set_xlabel('Epoch')
+        axes[0].set_ylabel('Loss')
+        axes[0].legend()
+        axes[0].grid(True, alpha=0.3)
+        
+        # Accuracy
+        axes[1].plot(epochs, self.history['train_accuracy'], 'b-', label='Train', linewidth=2)
+        axes[1].plot(epochs, self.history['val_accuracy'], 'r-', label='Validation', linewidth=2)
+        axes[1].set_title('Accuracy')
+        axes[1].set_xlabel('Epoch')
+        axes[1].set_ylabel('Accuracy')
+        axes[1].legend()
+        axes[1].grid(True, alpha=0.3)
+        
+        # F1 Score
+        axes[2].plot(epochs, self.history['train_f1'], 'b-', label='Train', linewidth=2)
+        axes[2].plot(epochs, self.history['val_f1'], 'r-', label='Validation', linewidth=2)
+        axes[2].set_title('F1 Score')
+        axes[2].set_xlabel('Epoch')
+        axes[2].set_ylabel('F1 Score')
+        axes[2].legend()
+        axes[2].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # Save the summary plot
+        summary_path = self.checkpoint_dir / 'training_summary.png'
+        plt.savefig(summary_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        logger.info(f"Training summary saved to {summary_path}")
+
     def log_metrics(self, epoch: int, train_metrics: Dict, val_metrics: Dict):
         """
         Log metrics to TensorBoard and console.
@@ -383,16 +493,28 @@ class Trainer:
         current_lr = self.optimizer.param_groups[0]['lr']
         self.writer.add_scalar('learning_rate', current_lr, epoch)
         
-        # Console logging
-        logger.info(f"Epoch {epoch}")
+        # Console logging with all requested metrics
+        logger.info(f"\nEpoch {epoch} Results:")
         logger.info(f"  Train - Loss: {train_metrics['loss']:.4f}, "
                    f"Acc: {train_metrics['accuracy']:.4f}, "
                    f"F1: {train_metrics['f1']:.4f}, "
+                   f"Recall: {train_metrics['recall']:.4f}, "
                    f"AUC: {train_metrics['auc_roc']:.4f}")
         logger.info(f"  Val   - Loss: {val_metrics['loss']:.4f}, "
                    f"Acc: {val_metrics['accuracy']:.4f}, "
                    f"F1: {val_metrics['f1']:.4f}, "
+                   f"Recall: {val_metrics['recall']:.4f}, "
                    f"AUC: {val_metrics['auc_roc']:.4f}")
+        
+        # Store metrics in history for plotting
+        self.history['train_loss'].append(train_metrics['loss'])
+        self.history['train_accuracy'].append(train_metrics['accuracy'])
+        self.history['train_f1'].append(train_metrics['f1'])
+        self.history['train_recall'].append(train_metrics['recall'])
+        self.history['val_loss'].append(val_metrics['loss'])
+        self.history['val_accuracy'].append(val_metrics['accuracy'])
+        self.history['val_f1'].append(val_metrics['f1'])
+        self.history['val_recall'].append(val_metrics['recall'])
     
     def train(self):
         """Main training loop."""
@@ -448,10 +570,18 @@ class Trainer:
                 if self.early_stopping(stop_metric):
                     logger.info(f"Early stopping at epoch {epoch}")
                     break
+            
+            # Save graphs every 10 epochs and at the end
+            if epoch % 10 == 0 or epoch == self.config.training.num_epochs:
+                self.save_training_graphs()
+        
+        # Final save of training graphs
+        self.save_training_graphs()
         
         logger.info("=" * 80)
         logger.info("TRAINING COMPLETED")
         logger.info(f"Best {self.config.metrics.primary_metric}: {self.best_metric:.4f} (epoch {self.best_epoch})")
+        logger.info(f"Training graphs saved to: {self.checkpoint_dir}")
         logger.info("=" * 80)
         
         self.writer.close()

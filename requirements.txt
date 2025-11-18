@@ -3,6 +3,7 @@ torchvision
 numpy
 Pillow
 matplotlib
+seaborn
 PyYAML
 tqdm
 scikit-image

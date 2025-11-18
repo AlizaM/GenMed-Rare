@@ -1,25 +1,26 @@
-# Training Configuration for Effusion vs Fibrosis Binary Classification
+# Training Configuration for Binary Classification
+# 🔄 TO SWITCH CLASSES: Just change class_positive and class_negative below!
 
 experiment:
-  name: "effusion_vs_fibrosis_baseline"
+  name: "auto_generated_baseline"  # Will be auto-generated as {class_negative}_vs_{class_positive}_baseline
   description: "Binary classification baseline without synthetic augmentation"
   seed: 42
 
 data:
+  # 🎯 CLASSES CONFIGURATION - CHANGE HERE TO SWITCH CLASSES
+  class_positive: "Pneumonia"  # Rare class (label=1) - Options: Fibrosis, Pneumonia, Cardiomegaly, etc.
+  class_negative: "Effusion"   # Common class (label=0) - Options: Effusion, No Finding, etc.
+  
   # Input paths
   interim_csv: "data/interim/filtered_data_entry.csv"
   train_val_dir: "data/interim/train_val"
   test_dir: "data/interim/test"
   
-  # Output paths
-  processed_dir: "data/processed/effusion_fibrosis"
+  # Output paths (auto-generated based on class names)
+  processed_dir: "auto_generated"  # Will become data/processed/{class_negative}_{class_positive}
   train_csv: "train.csv"
   val_csv: "val.csv"
   test_csv: "test.csv"
-  
-  # Classes
-  class_positive: "Fibrosis"  # Rare class (label=1)
-  class_negative: "Effusion"  # Common class (label=0)
   
   # Split configuration
   train_val_split: 0.8
@@ -54,17 +55,17 @@ training:
   lr_min: 0.000001
   
   # Early stopping
-  early_stopping: true
+  early_stopping: false
   early_stopping_patience: 10
   early_stopping_metric: "val_loss"  # Options: val_loss, val_accuracy, val_f1
   
-  # Checkpointing
+  # Checkpointing (auto-generated from experiment name)
   save_checkpoints: true
-  checkpoint_dir: "outputs/effusion_vs_fibrosis_baseline/checkpoints"
+  checkpoint_dir: "auto_generated"  # Will become outputs/{experiment_name}/checkpoints
   save_best_only: false  # Save both best and latest
   
-  # Logging
-  log_dir: "outputs/effusion_vs_fibrosis_baseline/logs"
+  # Logging (auto-generated from experiment name) 
+  log_dir: "auto_generated"  # Will become outputs/{experiment_name}/logs
   log_interval: 10  # Log every N batches
   
   # Mixed precision training

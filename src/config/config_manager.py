@@ -134,6 +134,22 @@ class Config:
     
     def __post_init__(self):
         """Post-initialization processing."""
+        # Auto-generate experiment name if not manually set
+        if self.experiment.name.endswith('_baseline') and 'vs' not in self.experiment.name:
+            self.experiment.name = f"{self.data.class_negative.lower()}_vs_{self.data.class_positive.lower()}_baseline"
+        
+        # Auto-generate processed_dir based on class names
+        class_combo = f"{self.data.class_negative.lower()}_{self.data.class_positive.lower()}"
+        if not str(self.data.processed_dir).endswith(class_combo):
+            self.data.processed_dir = f"data/processed/{class_combo}"
+        
+        # Auto-generate output directories based on experiment name
+        base_output = f"outputs/{self.experiment.name}"
+        if not str(self.training.checkpoint_dir).startswith(base_output):
+            self.training.checkpoint_dir = f"{base_output}/checkpoints"
+        if not str(self.training.log_dir).startswith(base_output):
+            self.training.log_dir = f"{base_output}/logs"
+        
         # Convert string paths to Path objects
         self.data.interim_csv = Path(self.data.interim_csv)
         self.data.train_val_dir = Path(self.data.train_val_dir)
@@ -153,7 +169,9 @@ class Config:
             self.hardware.pin_memory = False
     
     def create_dirs(self):
-        """Create necessary output directories."""
+        """Create necessary output directories and copy configuration files."""
+        import shutil
+        
         self.data.processed_dir.mkdir(parents=True, exist_ok=True)
         self.training.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.training.log_dir.mkdir(parents=True, exist_ok=True)
@@ -163,6 +181,27 @@ class Config:
         exp_log_dir = self.training.log_dir / self.experiment.name
         exp_checkpoint_dir.mkdir(parents=True, exist_ok=True)
         exp_log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Copy configuration file to experiment directory
+        experiment_base_dir = Path("outputs") / self.experiment.name
+        experiment_base_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Try to find and copy the config file
+        for config_path in ["configs/config.yaml", "config.yaml"]:
+            if Path(config_path).exists():
+                config_dest = experiment_base_dir / "config.yaml"
+                if not config_dest.exists():
+                    shutil.copy2(config_path, config_dest)
+                    print(f"Copied configuration to: {config_dest}")
+                break
+        
+        # Copy dataset file to experiment directory if it exists
+        dataset_src = self.data.processed_dir / "dataset.csv"
+        if dataset_src.exists():
+            dataset_dest = experiment_base_dir / "dataset.csv"
+            if not dataset_dest.exists():
+                shutil.copy2(dataset_src, dataset_dest)
+                print(f"Copied dataset to: {dataset_dest}")
         
         return exp_checkpoint_dir, exp_log_dir
 
