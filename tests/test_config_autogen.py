@@ -8,6 +8,10 @@ Run with:
 import pytest
 from pathlib import Path
 import shutil
+import sys
+
+# Add project root to path
+sys.path.append(str(Path(__file__).parent.parent))
 
 from src.config import load_config
 
@@ -144,9 +148,13 @@ class TestConfigAutoGeneration:
     
     def test_data_paths_exist(self, config):
         """Test that expected data paths exist or can be created."""
-        # interim_csv should be a string path
+        # interim_csv should be a Path object (config system converts strings to Path)
         assert hasattr(config.data, 'interim_csv')
-        assert isinstance(config.data.interim_csv, str)
+        assert isinstance(config.data.interim_csv, (str, Path)), f"Expected str or Path, got {type(config.data.interim_csv)}"
+        
+        # Check that it can be converted to Path
+        interim_path = Path(config.data.interim_csv)
+        assert interim_path.suffix == '.csv', "Should be a CSV file"
     
     def test_hardware_configuration(self, config):
         """Test that hardware settings are configured."""
@@ -157,8 +165,23 @@ class TestConfigAutoGeneration:
     def test_augmentation_configuration(self, config):
         """Test that augmentation settings are configured."""
         assert hasattr(config, 'augmentation')
-        assert hasattr(config.augmentation, 'train')
-        assert hasattr(config.augmentation, 'normalize')
+        
+        # Check that augmentation has the expected flattened attributes (not nested under 'train')
+        assert hasattr(config.augmentation, 'rotation_degrees')
+        assert hasattr(config.augmentation, 'brightness')
+        assert hasattr(config.augmentation, 'contrast')
+        assert hasattr(config.augmentation, 'gaussian_noise_std')
+        
+        # Check normalization settings
+        assert hasattr(config.augmentation, 'normalize_mean')
+        assert hasattr(config.augmentation, 'normalize_std')
+        assert hasattr(config.augmentation, 'normalize_only')
+        
+        # Verify values are reasonable
+        assert 0 <= config.augmentation.rotation_degrees <= 360
+        assert 0 <= config.augmentation.brightness <= 1
+        assert 0 <= config.augmentation.contrast <= 1
+        assert config.augmentation.gaussian_noise_std >= 0
 
 
 class TestConfigSwitching:

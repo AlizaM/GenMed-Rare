@@ -8,11 +8,19 @@ Improve classification performance on rare medical cases (Fibrosis) vs common ca
 
 ## Current Implementation
 
+### Classification Pipeline
 - **Dataset**: NIH Chest X-ray (filtered for Hernia, Pneumonia, Fibrosis, Effusion)
 - **Task**: Binary classification (Fibrosis vs Effusion)
 - **Model**: Swin Transformer (timm library)
 - **Augmentations**: Medical-safe (rotation ±10°, brightness/contrast, Gaussian noise - NO flips)
 - **Training**: PyTorch with TensorBoard logging, early stopping, checkpointing
+
+### Diffusion Pipeline
+- **Dataset**: Balanced diffusion dataset with medical conditions
+- **Model**: Stable Diffusion 1.5 with LoRA fine-tuning
+- **Task**: Generate synthetic chest X-rays conditioned on medical findings
+- **Training**: HuggingFace Diffusers with mixed precision and gradient checkpointing
+- **Output**: LoRA weights for generating rare medical cases
 
 ## Repository Structure
 
@@ -20,6 +28,7 @@ Improve classification performance on rare medical cases (Fibrosis) vs common ca
 GenMed-Rare/
 ├── configs/                    # YAML configuration files
 │   ├── config.yaml            # Main training configuration (Effusion vs Fibrosis)
+│   ├── config_diffusion.yaml  # Diffusion model training configuration
 │   └── config_test.yaml       # Quick test configuration (small dataset)
 ├── data/
 │   ├── raw/                   # Raw data (download separately)
@@ -39,17 +48,26 @@ GenMed-Rare/
 │   │   │   ├── Fibrosis/
 │   │   │   └── Effusion/
 │   │   └── filtered_data_entry.csv  # Filtered labels CSV
-│   └── processed/             # Preprocessed data (created by src/data/preprocess.py)
-│       └── effusion_fibrosis/
-│           ├── dataset.csv         # Unified dataset with split column
-│           └── dataset_test.csv    # Small test dataset (320 images)
+│   ├── processed/             # Preprocessed data (created by src/data/preprocess.py)
+│   │   └── effusion_fibrosis/
+│   │       ├── dataset.csv         # Unified dataset with split column
+│   │       └── dataset_test.csv    # Small test dataset (320 images)
+│   └── diffusion_data/        # Diffusion training data
+│       └── diffusion_data_balanced/  # Balanced dataset for diffusion training
+│           ├── diffusion_dataset_balanced.csv  # Image metadata
+│           └── *.png          # Chest X-ray images
 ├── outputs/                   # Training outputs (experiment-specific)
-│   └── <experiment_name>/     # e.g., effusion_vs_fibrosis_baseline/
-│       ├── checkpoints/       # Model checkpoints
-│       │   ├── best_checkpoint.pth
-│       │   └── latest_checkpoint.pth
-│       ├── logs/              # TensorBoard logs
-│       └── dataset_summary.csv # Dataset statistics
+│   ├── <experiment_name>/     # e.g., effusion_vs_fibrosis_baseline/ (classification)
+│   │   ├── checkpoints/       # Model checkpoints
+│   │   │   ├── best_checkpoint.pth
+│   │   │   └── latest_checkpoint.pth
+│   │   ├── logs/              # TensorBoard logs
+│   │   └── dataset_summary.csv # Dataset statistics
+│   └── diffusion_models/     # Diffusion training outputs
+│       └── <experiment_name>/ # e.g., sd15_lora_fibrosis/
+│           ├── checkpoints/   # LoRA model checkpoints
+│           ├── logs/          # Training logs
+│           └── samples/       # Generated validation images
 ├── src/                       # Source code
 │   ├── config/               # Configuration management
 │   │   ├── __init__.py
@@ -57,6 +75,7 @@ GenMed-Rare/
 │   ├── data/                 # Data pipeline
 │   │   ├── __init__.py
 │   │   ├── dataset.py        # PyTorch Dataset with medical augmentations
+│   │   ├── diffusion_dataset.py # Diffusion training dataset
 │   │   └── preprocess.py     # Binary classification data preparation
 │   ├── models/               # Model definitions
 │   │   ├── __init__.py
@@ -67,6 +86,8 @@ GenMed-Rare/
 ├── scripts/                   # Executable scripts
 │   ├── filter_and_organize_data.py  # Extract & organize NIH dataset
 │   ├── train_classifier.py          # Main training entry point
+│   ├── train_diffusion.py           # Diffusion model training
+│   ├── test_training_diffusion.py   # Quick diffusion training test
 │   ├── create_test_dataset.py       # Create small test dataset
 │   ├── test_training.py             # Quick training validation
 │   ├── verify_and_fix_images.py     # Verify image availability
@@ -126,6 +147,8 @@ python src/data/preprocess.py --config configs/config.yaml
 
 ### 3. Training
 
+#### Classification Training
+
 ```bash
 # Quick test with small dataset (recommended first)
 python scripts/create_test_dataset.py  # Creates 320-image test dataset
@@ -137,6 +160,36 @@ python scripts/train_classifier.py --config configs/config.yaml
 # Monitor with TensorBoard
 tensorboard --logdir=outputs/<experiment_name>/logs
 ```
+
+#### Diffusion Model Training
+
+```bash
+# Prerequisites: Ensure you have the balanced diffusion dataset
+# Data should be in: data/diffusion_data/diffusion_data_balanced/
+# CSV should be: data/diffusion_data/diffusion_data_balanced/diffusion_dataset_balanced.csv
+
+# Quick diffusion test (recommended first)
+python scripts/test_training_diffusion.py  # Validates dataset, model imports, and basic setup
+
+# Train Stable Diffusion LoRA model
+python scripts/train_diffusion.py --config configs/config_diffusion.yaml
+
+# Monitor training progress
+tensorboard --logdir=outputs/diffusion_models/<experiment_name>/logs
+
+# Generate sample images during/after training
+python scripts/generate_samples.py --config configs/config_diffusion.yaml \
+    --checkpoint outputs/diffusion_models/<experiment_name>/checkpoints/latest.pth \
+    --prompt "A chest X-ray showing Fibrosis" \
+    --num_images 4
+```
+
+**Diffusion Training Notes:**
+- **Memory Requirements**: Requires ~12GB+ GPU memory for batch_size=1 with gradient accumulation
+- **Training Time**: ~2-4 hours per epoch depending on dataset size and GPU
+- **LoRA Benefits**: Much faster training and smaller checkpoint files vs full fine-tuning
+- **Medical Safety**: No horizontal flips applied to preserve medical image orientation
+- **Prompt Format**: Uses template "A chest X-ray showing {labels}" (e.g., "A chest X-ray showing Fibrosis and Cardiomegaly")
 
 ### 4. Testing
 

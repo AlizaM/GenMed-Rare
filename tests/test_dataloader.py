@@ -20,6 +20,17 @@ def config():
 
 
 @pytest.fixture(scope="module")
+def test_config(config):
+    """Configuration with test-safe settings."""
+    # Create a copy to avoid modifying the original config
+    import copy
+    test_config = copy.deepcopy(config)
+    test_config.training.num_workers = 0  # Avoid multiprocessing warnings
+    test_config.hardware.pin_memory = False  # Avoid pin_memory warnings
+    return test_config
+
+
+@pytest.fixture(scope="module")
 def dataset_csv(config):
     """Get path to dataset CSV."""
     csv_path = config.data.processed_dir / 'dataset.csv'
@@ -28,50 +39,50 @@ def dataset_csv(config):
 
 
 @pytest.fixture(scope="module")
-def dataloaders(config):
-    """Create train and val dataloaders."""
-    return create_dataloaders(config)
+def dataloaders(test_config):
+    """Create train and val dataloaders with test-safe settings."""
+    return create_dataloaders(test_config)
 
 
 class TestChestXrayDataset:
     """Test ChestXrayDataset class."""
     
-    def test_dataset_creation_train(self, dataset_csv, config):
+    def test_dataset_creation_train(self, dataset_csv, test_config):
         """Test creating train dataset."""
-        dataset = ChestXrayDataset(dataset_csv, config, split='train')
+        dataset = ChestXrayDataset(dataset_csv, test_config, split='train')
         assert len(dataset) > 0, "Train dataset is empty"
         assert dataset.is_training is True, "Train dataset should have is_training=True"
     
-    def test_dataset_creation_val(self, dataset_csv, config):
+    def test_dataset_creation_val(self, dataset_csv, test_config):
         """Test creating val dataset."""
-        dataset = ChestXrayDataset(dataset_csv, config, split='val')
+        dataset = ChestXrayDataset(dataset_csv, test_config, split='val')
         assert len(dataset) > 0, "Val dataset is empty"
         assert dataset.is_training is False, "Val dataset should have is_training=False"
     
-    def test_dataset_creation_test(self, dataset_csv, config):
+    def test_dataset_creation_test(self, dataset_csv, test_config):
         """Test creating test dataset."""
-        dataset = ChestXrayDataset(dataset_csv, config, split='test')
+        dataset = ChestXrayDataset(dataset_csv, test_config, split='test')
         assert len(dataset) > 0, "Test dataset is empty"
         assert dataset.is_training is False, "Test dataset should have is_training=False"
     
-    def test_dataset_split_filtering(self, dataset_csv, config):
+    def test_dataset_split_filtering(self, dataset_csv, test_config):
         """Test that dataset correctly filters by split."""
         # Load full CSV
         df = pd.read_csv(dataset_csv)
         
         # Create datasets for each split
-        train_dataset = ChestXrayDataset(dataset_csv, config, split='train')
-        val_dataset = ChestXrayDataset(dataset_csv, config, split='val')
-        test_dataset = ChestXrayDataset(dataset_csv, config, split='test')
+        train_dataset = ChestXrayDataset(dataset_csv, test_config, split='train')
+        val_dataset = ChestXrayDataset(dataset_csv, test_config, split='val')
+        test_dataset = ChestXrayDataset(dataset_csv, test_config, split='test')
         
         # Check counts match
         assert len(train_dataset) == (df['split'] == 'train').sum(), "Train dataset size mismatch"
         assert len(val_dataset) == (df['split'] == 'val').sum(), "Val dataset size mismatch"
         assert len(test_dataset) == (df['split'] == 'test').sum(), "Test dataset size mismatch"
     
-    def test_dataset_getitem(self, dataset_csv, config):
+    def test_dataset_getitem(self, dataset_csv, test_config):
         """Test getting items from dataset."""
-        dataset = ChestXrayDataset(dataset_csv, config, split='train')
+        dataset = ChestXrayDataset(dataset_csv, test_config, split='train')
         
         # Get first item
         image, label = dataset[0]
@@ -81,15 +92,15 @@ class TestChestXrayDataset:
         assert isinstance(label, int), "Label should be an integer"
         
         # Check shapes
-        expected_shape = (config.data.channels, *config.data.image_size)
+        expected_shape = (test_config.data.channels, *test_config.data.image_size)
         assert image.shape == expected_shape, f"Image shape should be {expected_shape}, got {image.shape}"
         
         # Check label values
         assert label in [0, 1], "Label should be 0 or 1"
     
-    def test_dataset_labels(self, dataset_csv, config):
+    def test_dataset_labels(self, dataset_csv, test_config):
         """Test that dataset contains both classes."""
-        dataset = ChestXrayDataset(dataset_csv, config, split='train')
+        dataset = ChestXrayDataset(dataset_csv, test_config, split='train')
         
         labels = dataset.df['label'].values
         unique_labels = set(labels)
@@ -97,9 +108,9 @@ class TestChestXrayDataset:
         assert 0 in unique_labels, "Dataset should contain class 0"
         assert 1 in unique_labels, "Dataset should contain class 1"
     
-    def test_class_weights(self, dataset_csv, config):
+    def test_class_weights(self, dataset_csv, test_config):
         """Test class weight calculation."""
-        dataset = ChestXrayDataset(dataset_csv, config, split='train')
+        dataset = ChestXrayDataset(dataset_csv, test_config, split='train')
         weights = dataset.get_class_weights()
         
         assert isinstance(weights, torch.Tensor), "Weights should be a tensor"
@@ -127,16 +138,16 @@ class TestDataLoaders:
         assert len(train_loader.dataset) > 0, "Train dataset should have samples"
         assert len(val_loader.dataset) > 0, "Val dataset should have samples"
     
-    def test_batch_loading_train(self, dataloaders, config):
+    def test_batch_loading_train(self, dataloaders, test_config):
         """Test loading a batch from train loader."""
         train_loader, _ = dataloaders
         
         images, labels = next(iter(train_loader))
         
         # Check batch shapes
-        assert images.shape[0] == config.training.batch_size, "Batch size mismatch"
-        assert images.shape[1:] == (config.data.channels, *config.data.image_size), "Image dimensions mismatch"
-        assert labels.shape[0] == config.training.batch_size, "Label batch size mismatch"
+        assert images.shape[0] == test_config.training.batch_size, "Batch size mismatch"
+        assert images.shape[1:] == (test_config.data.channels, *test_config.data.image_size), "Image dimensions mismatch"
+        assert labels.shape[0] == test_config.training.batch_size, "Label batch size mismatch"
         
         # Check data types
         assert images.dtype == torch.float32, "Images should be float32"
@@ -145,15 +156,15 @@ class TestDataLoaders:
         # Check value ranges
         assert torch.all(labels >= 0) and torch.all(labels <= 1), "Labels should be 0 or 1"
     
-    def test_batch_loading_val(self, dataloaders, config):
+    def test_batch_loading_val(self, dataloaders, test_config):
         """Test loading a batch from val loader."""
         _, val_loader = dataloaders
         
         images, labels = next(iter(val_loader))
         
         # Check batch shapes (may be different if drop_last=False for val)
-        assert images.shape[0] <= config.training.batch_size, "Batch size should not exceed config"
-        assert images.shape[1:] == (config.data.channels, *config.data.image_size), "Image dimensions mismatch"
+        assert images.shape[0] <= test_config.training.batch_size, "Batch size should not exceed config"
+        assert images.shape[1:] == (test_config.data.channels, *test_config.data.image_size), "Image dimensions mismatch"
         
         # Check data types
         assert images.dtype == torch.float32, "Images should be float32"
@@ -213,12 +224,12 @@ class TestDatasetIntegrity:
         
         assert len(missing_images) == 0, f"Found missing images: {missing_images[:10]}"
     
-    def test_label_consistency(self, dataset_csv, config):
+    def test_label_consistency(self, dataset_csv, test_config):
         """Test that labels are consistent with Finding Labels."""
         df = pd.read_csv(dataset_csv)
         
-        class_pos = config.data.class_positive
-        class_neg = config.data.class_negative
+        class_pos = test_config.data.class_positive
+        class_neg = test_config.data.class_negative
         
         for idx, row in df.iterrows():
             finding_labels = row['Finding Labels']

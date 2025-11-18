@@ -17,6 +17,10 @@ import yaml
 import shutil
 from pathlib import Path
 import tempfile
+import sys
+
+# Add project root to path
+sys.path.append(str(Path(__file__).parent.parent))
 
 from src.data.diffusion_dataset import ChestXrayDiffusionDataset, collate_fn
 

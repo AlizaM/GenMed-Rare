@@ -31,7 +31,7 @@ diffusers>=0.25.0
 transformers>=4.36.0
 accelerate>=0.25.0
 peft>=0.7.0
+bitsandbytes>=0.41.0
 
-# Diffusion Optimizations (optional but recommended)
-bitsandbytes>=0.41.0  # For 8-bit Adam optimizer (saves memory)
-xformers>=0.0.23      # For faster attention (requires compatible PyTorch + CUDA)
+# Diffusion Optimizations (optional - install manually if you have compatible CUDA)
+# xformers>=0.0.23      # For faster attention (requires compatible PyTorch + CUDA)

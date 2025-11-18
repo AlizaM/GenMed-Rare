@@ -75,7 +75,16 @@ class TestExperimentConfig:
     
     def test_experiment_name(self, config, config_dict):
         """Test experiment name."""
-        assert config.experiment.name == config_dict['experiment']['name']
+        # Note: Config.__post_init__ auto-generates experiment name
+        # from class names when name ends with '_baseline'
+        raw_name = config_dict['experiment']['name']
+        if raw_name.endswith('_baseline') and 'vs' not in raw_name:
+            # Should be auto-generated as {class_negative}_vs_{class_positive}_baseline
+            expected_name = f"{config.data.class_negative.lower()}_vs_{config.data.class_positive.lower()}_baseline"
+            assert config.experiment.name == expected_name
+        else:
+            # Should match raw config
+            assert config.experiment.name == raw_name
         assert isinstance(config.experiment.name, str)
     
     def test_experiment_description(self, config, config_dict):

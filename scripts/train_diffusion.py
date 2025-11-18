@@ -224,7 +224,7 @@ def train_loop(
                 accelerator.backward(loss)
                 
                 if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(unet.parameters(), config['training']['max_grad_norm'])
+                    accelerator.clip_grad_norm_(unet.parameters(), float(config['training']['max_grad_norm']))
                 
                 optimizer.step()
                 lr_scheduler.step()
@@ -353,18 +353,18 @@ def main():
     # Setup models
     tokenizer, text_encoder, vae, unet = setup_models_and_tokenizer(config)
     
-    # Setup LoRA
-    unet = setup_lora(unet, config)
-    
-    # Enable memory optimizations
+    # Enable memory optimizations and checkpointing BEFORE LoRA setup
     if config['hardware']['enable_attention_slicing']:
-        unet.enable_attention_slicing()
+        unet.set_attention_slice("auto")
     
     if config['hardware']['enable_vae_slicing']:
         vae.enable_slicing()
     
     if config['training']['gradient_checkpointing']:
         unet.enable_gradient_checkpointing()
+    
+    # Setup LoRA (after memory optimizations)
+    unet = setup_lora(unet, config)
     
     # Setup noise scheduler
     noise_scheduler = DDPMScheduler.from_pretrained(
@@ -394,10 +394,10 @@ def main():
     # Setup optimizer
     optimizer = torch.optim.AdamW(
         unet.parameters(),
-        lr=config['training']['learning_rate'],
-        betas=(config['training']['adam_beta1'], config['training']['adam_beta2']),
-        weight_decay=config['training']['adam_weight_decay'],
-        eps=config['training']['adam_epsilon'],
+        lr=float(config['training']['learning_rate']),
+        betas=(float(config['training']['adam_beta1']), float(config['training']['adam_beta2'])),
+        weight_decay=float(config['training']['adam_weight_decay']),
+        eps=float(config['training']['adam_epsilon']),
     )
     
     # Setup learning rate scheduler
