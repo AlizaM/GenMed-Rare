@@ -1,0 +1,19 @@
+Metric,Count
+Total Images,10541
+Single-Label Images,6600
+Multi-Label Images,3941
+Images with Atelectasis,1300
+Images with Cardiomegaly,927
+Images with Effusion,1286
+Images with Infiltration,1288
+Images with Mass,1296
+Images with Nodule,1280
+Images with Pneumonia,876
+Images with Pneumothorax,1180
+Images with Consolidation,1025
+Images with Edema,812
+Images with Emphysema,982
+Images with Fibrosis,1251
+Images with Pleural_Thickening,1083
+Images with Hernia,141
+Images with No Finding,1251
