@@ -102,9 +102,29 @@ GenMed-Rare/
 
 ## Data Setup
 
-### Required Files (Download Separately)
+### Option 1: Pre-processed Data (Recommended for Quick Start)
 
-The NIH Chest X-ray dataset files should be placed in `data/raw/`:
+Skip the NIH dataset download and use pre-processed data directly:
+
+#### For Classification Training:
+- **Filtered NIH Dataset** (`data/interim/`)
+  - Pre-filtered for Hernia, Pneumonia, Fibrosis, Effusion
+  - Already organized into train_val/ and test/ directories
+  - **Size**: ~14,627 images
+  - **Download**: https://drive.google.com/file/d/1xBZDLDPtgVHFpFE79ouLlF4xFp1_oXZv/view?usp=drive_link
+  - Extract to: `data/interim/`
+
+#### For Diffusion Training:
+- **Balanced Diffusion Dataset** (`data/diffusion_data/`)
+  - Balanced across all 15 pathology labels
+  - Includes `diffusion_dataset_balanced.csv` metadata
+  - **Size**: 10,541 images
+  - **Download**: https://drive.google.com/file/d/171Rqd1T97BEnMJ9DPPnxXJ-F85YNJZbR/view?usp=drive_link
+  - Extract to: `data/diffusion_data/diffusion_data_balanced/`
+
+### Option 2: Full NIH Dataset (For Custom Filtering)
+
+Download the full NIH Chest X-ray dataset and process it yourself:
 
 1. **`archive.zip`** - NIH Chest X-ray dataset (112,120 PNG images, ~45GB)
    - Download from: [Kaggle NIH Chest X-rays](https://www.kaggle.com/datasets/nih-chest-xrays/data)
@@ -118,7 +138,16 @@ The NIH Chest X-ray dataset files should be placed in `data/raw/`:
    - Defines which images belong to train_val vs test sets
    - Place at: `data/raw/train_val_list.txt` and `data/raw/test_list.txt`
 
-**Note**: The `data/interim/` directory and its contents will be created automatically by running `scripts/filter_and_organize_data.py`.
+Then run the processing scripts:
+
+```bash
+# Extract and organize NIH dataset (creates data/interim/)
+python scripts/filter_and_organize_data.py
+
+# Create balanced diffusion dataset (creates data/diffusion_data/)
+python scripts/prepare_diffusion_dataset.py
+python scripts/balance_diffusion_dataset.py --apply
+```
 
 ## Quick Start
 
@@ -135,14 +164,30 @@ pip install -r requirements.txt
 
 ### 2. Data Preparation
 
+#### Option A: Using Pre-processed Data
+If you downloaded the pre-processed datasets:
+
+```bash
+# For classification: Extract filtered data to data/interim/
+# For diffusion: Extract balanced data to data/diffusion_data/diffusion_data_balanced/
+
+# Then run binary classification preprocessing
+python src/data/preprocess.py --config configs/config.yaml
+```
+
+#### Option B: Processing from Raw NIH Dataset
+If you downloaded the full NIH dataset:
+
 ```bash
 # Step 1: Extract and organize NIH dataset (creates data/interim/)
-# This will filter for target labels and organize into label folders
 python scripts/filter_and_organize_data.py
 
 # Step 2: Preprocess for binary classification (creates data/processed/)
-# This creates unified dataset.csv with train/val/test splits
 python src/data/preprocess.py --config configs/config.yaml
+
+# Step 3 (Optional): Create balanced diffusion dataset
+python scripts/prepare_diffusion_dataset.py
+python scripts/balance_diffusion_dataset.py --apply
 ```
 
 ### 3. Training
@@ -163,11 +208,12 @@ tensorboard --logdir=outputs/<experiment_name>/logs
 
 #### Diffusion Model Training
 
-```bash
-# Prerequisites: Ensure you have the balanced diffusion dataset
-# Data should be in: data/diffusion_data/diffusion_data_balanced/
-# CSV should be: data/diffusion_data/diffusion_data_balanced/diffusion_dataset_balanced.csv
+**Prerequisites**: 
+- Balanced diffusion dataset should be in: `data/diffusion_data/diffusion_data_balanced/`
+- CSV should exist: `data/diffusion_data/diffusion_data_balanced/diffusion_dataset_balanced.csv`
+- **If you don't have this**: Either download the pre-processed balanced dataset (Option 1 above) or create it from raw data (see Option 2 data preparation)
 
+```bash
 # Quick diffusion test (recommended first)
 python scripts/test_training_diffusion.py  # Validates dataset, model imports, and basic setup
 
@@ -178,10 +224,10 @@ python scripts/train_diffusion.py --config configs/config_diffusion.yaml
 tensorboard --logdir=outputs/diffusion_models/<experiment_name>/logs
 
 # Generate sample images during/after training
-python scripts/generate_samples.py --config configs/config_diffusion.yaml \
-    --checkpoint outputs/diffusion_models/<experiment_name>/checkpoints/latest.pth \
+python scripts/generate_xrays.py \
+    --checkpoint outputs/diffusion_models/<experiment_name>/checkpoints/checkpoint-5000 \
     --prompt "A chest X-ray showing Fibrosis" \
-    --num_images 4
+    --num-images 4
 ```
 
 **Diffusion Training Notes:**
