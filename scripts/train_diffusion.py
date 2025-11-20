@@ -35,6 +35,172 @@ sys.path.append(str(Path(__file__).parent.parent))
 from src.data.diffusion_dataset import ChestXrayDiffusionDataset, collate_fn
 
 
+def find_latest_checkpoint(checkpoint_dir):
+    """Find the latest checkpoint in the checkpoint directory.
+    
+    Args:
+        checkpoint_dir: Path to checkpoint directory
+        
+    Returns:
+        tuple: (checkpoint_path, step_number) or (None, 0) if no checkpoints found
+    """
+    checkpoint_path = Path(checkpoint_dir)
+    
+    if not checkpoint_path.exists():
+        return None, 0
+    
+    # Look for step-based checkpoints (preferred for resuming)
+    step_checkpoints = []
+    epoch_checkpoints = []
+    
+    for path in checkpoint_path.iterdir():
+        if path.is_dir():
+            if path.name.startswith('checkpoint-step-'):
+                try:
+                    step_num = int(path.name.split('-')[-1])
+                    step_checkpoints.append((step_num, path))
+                except ValueError:
+                    continue
+            elif path.name.startswith('checkpoint-epoch-'):
+                try:
+                    epoch_num = int(path.name.split('-')[-1])
+                    epoch_checkpoints.append((epoch_num, path))
+                except ValueError:
+                    continue
+    
+    # Prefer step-based checkpoints as they're more precise
+    if step_checkpoints:
+        step_checkpoints.sort(key=lambda x: x[0])
+        latest_step, latest_path = step_checkpoints[-1]
+        print(f"Found latest step checkpoint: {latest_path} (step {latest_step})")
+        return str(latest_path), latest_step
+    
+    # Fall back to epoch-based checkpoints
+    if epoch_checkpoints:
+        epoch_checkpoints.sort(key=lambda x: x[0])
+        latest_epoch, latest_path = epoch_checkpoints[-1]
+        print(f"Found latest epoch checkpoint: {latest_path} (epoch {latest_epoch})")
+        # For epoch checkpoints, we estimate step as 0 since we don't know exact step
+        return str(latest_path), 0
+    
+    print("No checkpoints found")
+    return None, 0
+
+
+def load_checkpoint_for_resume(unet, checkpoint_path, config):
+    """Load a checkpoint to resume training.
+    
+    Args:
+        unet: The UNet model (without LoRA applied yet)
+        checkpoint_path: Path to the checkpoint directory
+        config: Training configuration
+        
+    Returns:
+        tuple: (unet_with_lora, success)
+    """
+    checkpoint_path = Path(checkpoint_path)
+    
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint directory not found: {checkpoint_path}")
+    
+    print(f"\n🔄 Loading checkpoint from: {checkpoint_path}")
+    
+    try:
+        if config['model']['use_lora']:
+            # For LoRA models, first set up LoRA structure, then load weights
+            print("Setting up LoRA structure...")
+            unet_with_lora = setup_lora(unet, config)
+            
+            # Load the LoRA adapter weights
+            print("Loading LoRA weights...")
+            from peft import PeftModel
+            
+            # Try to load the adapter
+            try:
+                # Method 1: Load via from_pretrained (most reliable)
+                unet_with_lora = PeftModel.from_pretrained(unet, checkpoint_path)
+                print("✓ LoRA checkpoint loaded via from_pretrained")
+            except Exception as e1:
+                print(f"from_pretrained failed: {e1}")
+                try:
+                    # Method 2: Load adapter into existing LoRA model
+                    unet_with_lora.load_adapter(checkpoint_path, adapter_name="default")
+                    print("✓ LoRA checkpoint loaded via load_adapter")
+                except Exception as e2:
+                    print(f"load_adapter failed: {e2}")
+                    raise Exception(f"Failed to load LoRA checkpoint. Errors: from_pretrained={e1}, load_adapter={e2}")
+            
+            # CRITICAL: Ensure proper gradient settings after loading checkpoint
+            # Freeze base model parameters (should not require gradients)
+            for name, param in unet_with_lora.named_parameters():
+                if 'lora_' not in name:  # Base model parameters
+                    param.requires_grad = False
+                else:  # LoRA adapter parameters
+                    param.requires_grad = True
+            
+            # Set to training mode
+            unet_with_lora.train()
+            
+            # Verify gradient setup
+            trainable_params = sum(p.numel() for p in unet_with_lora.parameters() if p.requires_grad)
+            total_params = sum(p.numel() for p in unet_with_lora.parameters())
+            print(f"✓ Gradient setup verified: {trainable_params:,} trainable / {total_params:,} total params")
+                    
+        else:
+            # For full model checkpoints
+            model_path = checkpoint_path / "pytorch_model.bin"
+            if not model_path.exists():
+                raise FileNotFoundError(f"Model weights not found: {model_path}")
+            
+            state_dict = torch.load(model_path, map_location='cpu')
+            unet.load_state_dict(state_dict)
+            unet_with_lora = unet
+            print("✓ Full model checkpoint loaded")
+        
+        return unet_with_lora, True
+        
+    except Exception as e:
+        print(f"❌ Failed to load checkpoint: {e}")
+        print(f"Checkpoint structure:")
+        try:
+            for item in checkpoint_path.iterdir():
+                print(f"  - {item.name}")
+        except:
+            print("  Could not list checkpoint contents")
+        return None, False
+
+
+def extract_step_from_checkpoint_path(checkpoint_path):
+    """Extract step number from checkpoint path.
+    
+    Args:
+        checkpoint_path: Path to checkpoint directory
+        
+    Returns:
+        int: Step number, or 0 if cannot determine
+    """
+    path_str = str(checkpoint_path)
+    
+    # Look for step-based checkpoints first (most precise)
+    if 'checkpoint-step-' in path_str:
+        try:
+            step_str = path_str.split('checkpoint-step-')[-1]
+            # Remove any trailing path separators or additional text
+            step_str = step_str.split('/')[0].split('\\')[0]
+            return int(step_str)
+        except ValueError:
+            pass
+    
+    # Look for epoch-based checkpoints (less precise)
+    if 'checkpoint-epoch-' in path_str:
+        print("⚠️ Resuming from epoch checkpoint - step count will restart from 0")
+        return 0
+    
+    # Default
+    print("⚠️ Could not determine step from checkpoint path - starting from step 0")
+    return 0
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Fine-tune Stable Diffusion with LoRA")
     parser.add_argument(
@@ -47,7 +213,12 @@ def parse_args():
         "--resume",
         type=str,
         default=None,
-        help="Path to checkpoint to resume from"
+        help="Path to specific checkpoint directory to resume from"
+    )
+    parser.add_argument(
+        "--resume-latest",
+        action="store_true",
+        help="Automatically resume from the latest checkpoint in checkpoint_dir"
     )
     return parser.parse_args()
 
@@ -123,7 +294,25 @@ def setup_lora(unet, config):
     )
     
     unet = get_peft_model(unet, lora_config)
+    
+    # Ensure proper gradient settings
+    # Base model parameters should be frozen, LoRA parameters should be trainable
+    for name, param in unet.named_parameters():
+        if 'lora_' not in name:  # Base model parameters
+            param.requires_grad = False
+        else:  # LoRA adapter parameters
+            param.requires_grad = True
+    
+    # Set to training mode
+    unet.train()
+    
+    # Print trainable parameters info
     unet.print_trainable_parameters()
+    
+    # Verify gradient setup
+    trainable_params = sum(p.numel() for p in unet.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in unet.parameters())
+    print(f"✓ LoRA setup complete: {trainable_params:,} trainable / {total_params:,} total params")
     
     return unet
 
@@ -164,30 +353,56 @@ def train_loop(
     accelerator,
     writer,
     checkpoint_dir,
+    start_step=0,
 ):
-    """Main training loop with enhanced metrics tracking."""
+    """Main training loop with enhanced metrics tracking and resume support."""
     num_epochs = config['training']['num_train_epochs']
     gradient_accumulation_steps = config['training']['gradient_accumulation_steps']
     logging_steps = config['training']['logging_steps']
     save_steps = config['training']['save_steps']
     validation_steps = config['training']['validation_steps']
     
-    global_step = 0
+    global_step = start_step
     best_loss = float('inf')
     epoch_losses = []
     
+    # Calculate starting epoch from global step
+    # NOTE: We need to account for gradient accumulation since len(train_dataloader) 
+    # gives batch steps, not training steps
+    steps_per_epoch = len(train_dataloader) // config['training']['gradient_accumulation_steps']
+    if len(train_dataloader) % config['training']['gradient_accumulation_steps'] != 0:
+        steps_per_epoch += 1
+    
+    start_epoch = global_step // steps_per_epoch if steps_per_epoch > 0 else 0
+    start_step_in_epoch = global_step % steps_per_epoch if steps_per_epoch > 0 else 0
+    
+    # Ensure we don't exceed total epochs
+    start_epoch = min(start_epoch, num_epochs - 1)
+    
+    # Calculate total remaining steps for progress bar
+    total_steps = num_epochs * steps_per_epoch
+    remaining_steps = total_steps - start_step
+    
     progress_bar = tqdm(
-        range(num_epochs * len(train_dataloader)),
-        desc="Training",
+        range(remaining_steps),
+        desc=f"Training (from step {start_step})",
         disable=not accelerator.is_local_main_process,
     )
     
-    for epoch in range(num_epochs):
+    if start_step > 0:
+        print(f"🔄 Resuming from epoch {start_epoch} (epoch {start_epoch + 1} of {num_epochs}), global step {start_step}")
+        print(f"   Will skip {start_step_in_epoch} steps in current epoch")
+        print(f"   Steps per epoch: {steps_per_epoch}")
+    
+    for epoch in range(start_epoch, num_epochs):
         unet.train()
         epoch_loss = 0.0
         num_batches = 0
         
         for step, batch in enumerate(train_dataloader):
+            # Skip steps if resuming within an epoch
+            if epoch == start_epoch and step < start_step_in_epoch:
+                continue
             with accelerator.accumulate(unet):
                 # Convert images to latent space
                 latents = vae.encode(batch['pixel_values'].to(accelerator.device)).latent_dist.sample()
@@ -333,17 +548,22 @@ def save_checkpoint(unet, checkpoint_dir, step, config, epoch=None, is_best=Fals
     # If epoch is provided, also save epoch-based checkpoint
     if epoch is not None:
         epoch_path = checkpoint_dir / f"checkpoint-epoch-{epoch}"
-        epoch_path.mkdir(exist_ok=True)
         
-        if config['model']['use_lora']:
-            unet.save_pretrained(epoch_path)
+        # Check if epoch checkpoint already exists (to avoid overwriting when resuming)
+        if epoch_path.exists():
+            print(f"⚠️  Epoch checkpoint already exists: {epoch_path} - skipping to avoid overwrite")
         else:
-            unet.save_pretrained(epoch_path)
+            epoch_path.mkdir(exist_ok=True)
             
-        print(f"Epoch checkpoint saved to {epoch_path}")
-        
-        # Keep only last 3 epoch checkpoints to save space
-        cleanup_old_checkpoints(checkpoint_dir, "checkpoint-epoch-", keep_last=3)
+            if config['model']['use_lora']:
+                unet.save_pretrained(epoch_path)
+            else:
+                unet.save_pretrained(epoch_path)
+                
+            print(f"Epoch checkpoint saved to {epoch_path}")
+            
+            # Keep only last 3 epoch checkpoints to save space
+            cleanup_old_checkpoints(checkpoint_dir, "checkpoint-epoch-", keep_last=3)
     
     # Save as best model if specified
     if is_best:
@@ -472,8 +692,38 @@ def main():
     if config['training']['gradient_checkpointing']:
         unet.enable_gradient_checkpointing()
     
-    # Setup LoRA (after memory optimizations)
-    unet = setup_lora(unet, config)
+    # Handle resume functionality
+    start_step = 0
+    resume_checkpoint = None
+    
+    if args.resume_latest:
+        # Find latest checkpoint automatically
+        latest_checkpoint, latest_step = find_latest_checkpoint(checkpoint_dir)
+        if latest_checkpoint:
+            resume_checkpoint = latest_checkpoint
+            start_step = latest_step
+            print(f"🔍 Auto-resume: Found latest checkpoint at step {start_step}")
+        else:
+            print("🔍 Auto-resume: No checkpoints found, starting fresh training")
+    elif args.resume:
+        # Use specific checkpoint provided
+        if Path(args.resume).exists():
+            resume_checkpoint = args.resume
+            start_step = extract_step_from_checkpoint_path(args.resume)
+            print(f"📁 Manual resume: Using checkpoint from step {start_step}")
+        else:
+            raise FileNotFoundError(f"Resume checkpoint not found: {args.resume}")
+    
+    # Load checkpoint if resuming
+    if resume_checkpoint:
+        print(f"\n🔄 Resuming training from checkpoint: {resume_checkpoint}")
+        unet, success = load_checkpoint_for_resume(unet, resume_checkpoint, config)
+        if not success:
+            raise RuntimeError(f"Failed to load checkpoint: {resume_checkpoint}")
+    else:
+        # Setup LoRA for fresh training
+        print("\n🚀 Starting fresh training...")
+        unet = setup_lora(unet, config)
     
     # Setup noise scheduler
     noise_scheduler = DDPMScheduler.from_pretrained(
@@ -500,9 +750,16 @@ def main():
         collate_fn=collate_fn,
     )
     
+    # Verify gradient setup before creating optimizer
+    trainable_params = [p for p in unet.parameters() if p.requires_grad]
+    if not trainable_params:
+        raise RuntimeError("No trainable parameters found in the model! Check gradient setup.")
+    
+    print(f"🔧 Pre-optimizer check: {len(trainable_params)} trainable parameter tensors")
+    
     # Setup optimizer
     optimizer = torch.optim.AdamW(
-        unet.parameters(),
+        trainable_params,  # Only pass trainable parameters
         lr=float(config['training']['learning_rate']),
         betas=(float(config['training']['adam_beta1']), float(config['training']['adam_beta2'])),
         weight_decay=float(config['training']['adam_weight_decay']),
@@ -533,7 +790,10 @@ def main():
     
     # Train
     print("\n" + "="*60)
-    print("Starting Training")
+    if resume_checkpoint:
+        print(f"Resuming Training from Step {start_step:,}")
+    else:
+        print("Starting Training")
     print("="*60)
     print(f"Experiment: {config['experiment']['name']}")
     print(f"Dataset size: {len(dataset)}")
@@ -543,6 +803,9 @@ def main():
     print(f"Number of epochs: {config['training']['num_train_epochs']}")
     print(f"Learning rate: {config['training']['learning_rate']}")
     print(f"Device: {accelerator.device}")
+    if resume_checkpoint:
+        print(f"Resume from: {resume_checkpoint}")
+        print(f"Starting step: {start_step:,}")
     print("="*60 + "\n")
     
     train_loop(
@@ -558,6 +821,7 @@ def main():
         accelerator=accelerator,
         writer=writer,
         checkpoint_dir=checkpoint_dir,
+        start_step=start_step,
     )
     
     if writer:

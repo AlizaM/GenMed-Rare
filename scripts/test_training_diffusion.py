@@ -57,7 +57,7 @@ def create_test_config(original_config_path: str) -> dict:
     return config
 
 
-def test_dataset_loading(config: dict) -> int:
+def validate_dataset_loading(config: dict) -> int:
     """Test dataset loading and return number of samples."""
     print("=" * 50)
     print("TESTING DATASET LOADING")
@@ -99,7 +99,7 @@ def test_dataset_loading(config: dict) -> int:
     return len(dataset)
 
 
-def test_dataloader(config: dict, dataset_size: int) -> DataLoader:
+def validate_dataloader(config: dict, dataset_size: int) -> DataLoader:
     """Test DataLoader creation with a small subset."""
     print("\\n" + "=" * 50)
     print("TESTING DATALOADER")
@@ -158,7 +158,7 @@ def test_dataloader(config: dict, dataset_size: int) -> DataLoader:
     return dataloader
 
 
-def test_model_imports():
+def validate_model_imports():
     """Test that all required model components can be imported."""
     print("\\n" + "=" * 50)
     print("TESTING MODEL IMPORTS")
@@ -431,7 +431,7 @@ def run_actual_training(config: dict) -> bool:
         return False
 
 
-def main():
+def main(skip_training=False):
     """Run diffusion training test with actual training."""
     print("🚀 DIFFUSION TRAINING TEST - WITH REAL TRAINING")
     print("Testing diffusion model training pipeline with actual LoRA training...")
@@ -457,16 +457,16 @@ def main():
     
     try:
         # Test 1: Dataset loading
-        dataset_size = test_dataset_loading(config)
+        dataset_size = validate_dataset_loading(config)
         
         # Test 2: Create small test dataset
         test_csv = create_small_test_dataset(config, max_samples=15)
         
         # Test 3: DataLoader
-        dataloader = test_dataloader(config, 15)  # Use small test size
+        dataloader = validate_dataloader(config, 15)  # Use small test size
         
         # Test 4: Model imports
-        if not test_model_imports():
+        if not validate_model_imports():
             return False
         
         # Test 5: ACTUAL TRAINING
@@ -474,6 +474,11 @@ def main():
         print("This will train a LoRA model for ~10 steps on 15 images.")
         print("Expected time: 2-5 minutes depending on GPU.")
         print()
+        
+        if skip_training:
+            print("⏭️  Skipping actual training (--no-training flag)")
+            print("✅ Setup validation completed - ready for full training!")
+            return True
         
         response = input("Run actual diffusion training? [Y/n]: ").strip().lower()
         if response not in ['n', 'no']:
@@ -509,5 +514,7 @@ def main():
 
 
 if __name__ == "__main__":
-    success = main()
+    # Check for --no-training flag to skip actual training
+    skip_training = "--no-training" in sys.argv
+    success = main(skip_training=skip_training)
     sys.exit(0 if success else 1)
