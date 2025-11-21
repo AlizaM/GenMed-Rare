@@ -3,7 +3,7 @@
 experiment:
   name: "sd15_lora_fibrosis"
   description: "Stable Diffusion 1.5 with LoRA for chest X-ray generation"
-  seed: 42
+  seed: 100
 
 model:
   pretrained_model: "runwayml/stable-diffusion-v1-5"
@@ -29,7 +29,7 @@ model:
   lora_bias: "none"
 
 data:
-  data_dir: "/home/aliza/cv_project/GenMed-Rare/data/diffusion_data/diffusion_data_balanced"
+  data_dir: "data/diffusion_data"
   csv_file: "diffusion_dataset_balanced.csv"
   image_size: 512
   center_crop: true
@@ -38,9 +38,9 @@ data:
 
 training:
   # Core training parameters
-  num_train_epochs: 50
-  train_batch_size: 2
-  gradient_accumulation_steps: 4  # Effective batch size = 1 * 4 = 4
+  num_train_epochs: 20
+  train_batch_size: 8
+  gradient_accumulation_steps: 1  # Effective batch size = 8 * 2 = 16
   learning_rate: 0.0001
   max_grad_norm: 1.0
   

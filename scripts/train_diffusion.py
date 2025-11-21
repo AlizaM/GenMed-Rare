@@ -646,8 +646,11 @@ def validate(unet, vae, text_encoder, tokenizer, noise_scheduler, config, step, 
         img_filename = step_dir / f"validation_image_{i:02d}.png"
         img.save(img_filename)
         
-        # Log to tensorboard (convert PIL to tensor)
-        img_tensor = torch.tensor(np.array(img)).permute(2, 0, 1) / 255.0
+        # Convert PIL Image to numpy array, then to tensor (fixes RuntimeError)
+        img_array = np.array(img)
+        img_tensor = torch.from_numpy(img_array).permute(2, 0, 1).float() / 255.0
+        
+        # Log to tensorboard
         if writer:
             writer.add_image(f'validation/image_{i}', img_tensor, step)
     
