@@ -78,7 +78,8 @@ def plot_training_metrics(data, save_plots=False, output_dir="outputs/plots"):
             window = max(1, len(values) // 50)  # Smooth over 2% of data
             smoothed = pd.Series(values).rolling(window=window, center=True).mean()
             ax.plot(steps, smoothed, color='red', linewidth=2, label=f'Smoothed (window={window})')
-            ax.legend(ax.set_title('Training Loss (per step)'))
+            ax.legend()
+        ax.set_title('Training Loss (per step)')
         ax.set_xlabel('Step')
         ax.set_ylabel('Loss')
         ax.grid(True, alpha=0.3)
@@ -106,16 +107,21 @@ def plot_training_metrics(data, save_plots=False, output_dir="outputs/plots"):
         ax.grid(True, alpha=0.3)
         ax.ticklabel_format(style='scientific', axis='y', scilimits=(0,0))
     
-    # Plot 4: Loss Trend (if available)
+    # Plot 4: Loss Trend (5-epoch moving average for stability assessment)
     if 'train/loss_trend_5epoch' in data:
         ax = axes[1, 1]
         epochs = data['train/loss_trend_5epoch']['steps']
         values = data['train/loss_trend_5epoch']['values']
         ax.plot(epochs, values, marker='s', linewidth=2, markersize=4, color='purple')
-        ax.set_title('5-Epoch Loss Trend')
+        ax.set_title('5-Epoch Loss Trend (Smoothed)')
         ax.set_xlabel('Epoch')
         ax.set_ylabel('5-Epoch Moving Average')
         ax.grid(True, alpha=0.3)
+        # Add annotation explaining this metric
+        textstr = '5-epoch rolling average\nshows overall training stability'
+        ax.text(0.95, 0.95, textstr, transform=ax.transAxes, fontsize=8,
+                verticalalignment='top', horizontalalignment='right',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
     else:
         # If no trend data, show training progress
         ax = axes[1, 1]
@@ -135,7 +141,7 @@ def plot_training_metrics(data, save_plots=False, output_dir="outputs/plots"):
         plt.savefig(plot_file, dpi=300, bbox_inches='tight')
         print(f"📊 Metrics plot saved: {plot_file}")
     
-    plt.show()
+    return fig  # Return figure object
 
 
 def print_training_summary(data):
@@ -166,9 +172,10 @@ def print_training_summary(data):
         print(f"   Initial: {lr_values[0]:.2e}")
         print(f"   Current: {lr_values[-1]:.2e}")
     
-    total_steps = max([max(data[key]['steps']) for key in data.keys() if data[key]['steps']])
-    print(f"\\n🏃‍♂️ Training Progress:")
-    print(f"   Total steps: {total_steps:,}")
+    if data:
+        total_steps = max([max(data[key]['steps']) for key in data.keys() if data[key]['steps']])
+        print(f"\n🏃‍♂️ Training Progress:")
+        print(f"   Total steps: {total_steps:,}")
     
     print("="*60)
 
@@ -184,40 +191,71 @@ def main():
     parser.add_argument(
         "--save-plots",
         action="store_true",
+        default=True,  # Save by default
         help="Save plots to file instead of just displaying"
+    )
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Display plots interactively (in addition to saving)"
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/plots",
-        help="Directory to save plots"
+        default=None,  # Will be auto-determined from log_dir
+        help="Directory to save plots (defaults to plots/ under the log directory parent)"
     )
     
     args = parser.parse_args()
     
+    # Default log directory if config doesn't exist
+    log_dir = None
+    
     try:
         # Load config
-        with open(args.config, 'r') as f:
-            config = yaml.safe_load(f)
-        
-        log_dir = config['training']['log_dir']
+        if Path(args.config).exists():
+            with open(args.config, 'r') as f:
+                config = yaml.safe_load(f)
+            log_dir = config['training']['log_dir']
+        else:
+            # Try to auto-detect from outputs
+            log_dir = "outputs/diffusion_outputs/sd_job_14631/logs"
+            print(f"⚠️  Config not found, trying default: {log_dir}")
         
         # Load tensorboard data
         data = load_tensorboard_data(log_dir)
+        
+        # Determine output directory (same parent as logs, in plots/ subdirectory)
+        if args.output_dir is None:
+            # If log_dir is "outputs/diffusion_outputs/sd_job_XXX/logs"
+            # then output_dir should be "outputs/diffusion_outputs/sd_job_XXX/plots"
+            log_path = Path(log_dir)
+            output_dir = log_path.parent / "plots"
+        else:
+            output_dir = args.output_dir
         
         # Print summary
         print_training_summary(data)
         
         # Create plots
-        plot_training_metrics(data, save_plots=args.save_plots, output_dir=args.output_dir)
+        fig = plot_training_metrics(data, save_plots=args.save_plots, output_dir=str(output_dir))
         
-        if not args.save_plots:
-            print("\\n💡 Tip: Use --save-plots to save plots to file")
+        # Optionally show interactively
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig)  # Clean up to avoid memory issues
+        
+        if args.save_plots:
+            print(f"\n✅ Plots saved to: {output_dir}/diffusion_training_metrics.png")
         
     except Exception as e:
         print(f"❌ Error: {e}")
         print("\\nMake sure training has been started and TensorBoard logs exist.")
-        print(f"Expected log directory: {config.get('training', {}).get('log_dir', 'Not found')}")
+        if log_dir:
+            print(f"Expected log directory: {log_dir}")
+        else:
+            print("Could not determine log directory. Check your config file.")
 
 
 if __name__ == "__main__":
