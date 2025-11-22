@@ -367,11 +367,8 @@ def train_loop(
     epoch_losses = []
     
     # Calculate starting epoch from global step
-    # NOTE: We need to account for gradient accumulation since len(train_dataloader) 
-    # gives batch steps, not training steps
-    steps_per_epoch = len(train_dataloader) // config['training']['gradient_accumulation_steps']
-    if len(train_dataloader) % config['training']['gradient_accumulation_steps'] != 0:
-        steps_per_epoch += 1
+    # NOTE: global_step increments once per batch, so steps_per_epoch = number of batches
+    steps_per_epoch = len(train_dataloader)
     
     start_epoch = global_step // steps_per_epoch if steps_per_epoch > 0 else 0
     start_step_in_epoch = global_step % steps_per_epoch if steps_per_epoch > 0 else 0
@@ -405,7 +402,13 @@ def train_loop(
                 continue
             with accelerator.accumulate(unet):
                 # Convert images to latent space
-                latents = vae.encode(batch['pixel_values'].to(accelerator.device)).latent_dist.sample()
+                # Ensure pixel_values matches VAE dtype (float32) and is contiguous
+                pixel_values = batch['pixel_values'].to(
+                    device=accelerator.device, 
+                    dtype=torch.float32
+                ).contiguous()
+                
+                latents = vae.encode(pixel_values).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
                 
                 # Sample noise
@@ -782,9 +785,14 @@ def main():
         unet, optimizer, train_dataloader, lr_scheduler
     )
     
-    # Move models to device
-    vae.to(accelerator.device)
-    text_encoder.to(accelerator.device)
+    # Move models to device with explicit dtype to avoid misalignment issues
+    # VAE and text encoder use float32 for stability
+    vae.to(device=accelerator.device, dtype=torch.float32)
+    text_encoder.to(device=accelerator.device, dtype=torch.float32)
+    
+    # Ensure VAE is in eval mode and gradients are disabled
+    vae.eval()
+    text_encoder.eval()
     
     # Setup tensorboard
     writer = None
