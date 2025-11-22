@@ -259,11 +259,16 @@ def setup_models_and_tokenizer(config):
         subfolder="text_encoder"
     )
     
-    # Load VAE
-    vae = AutoencoderKL.from_pretrained(
-        pretrained_model,
-        subfolder="vae"
-    )
+    # Load VAE (use custom VAE if specified, otherwise use the one from pretrained model)
+    if 'vae' in config and 'path' in config['vae']:
+        print(f"Loading custom VAE: {config['vae']['path']}")
+        vae = AutoencoderKL.from_pretrained(config['vae']['path'])
+    else:
+        print(f"Loading VAE from pretrained model: {pretrained_model}")
+        vae = AutoencoderKL.from_pretrained(
+            pretrained_model,
+            subfolder="vae"
+        )
     
     # Load UNet
     unet = UNet2DConditionModel.from_pretrained(

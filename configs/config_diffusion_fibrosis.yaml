@@ -1,0 +1,73 @@
+model:
+  pretrained_model: "danyalmalik/stable-diffusion-chest-xray"
+  vae:
+    path: "stabilityai/sd-vae-ft-mse"
+  
+training:
+  # Prior-based training for Fibrosis
+  mode: "prior_based"
+  target_pathology: "fibrosis"
+  
+  # Data paths
+  target_images_dir: "data/pure_class_folders/fibrosis"
+  target_images_csv: "data/pure_class_folders/fibrosis_images.csv"
+  prior_images_dir: "data/pure_class_folders/healthy"
+  prior_images_csv: "data/pure_class_folders/healthy_images.csv"
+  
+  # Conditioning prompts
+  target_prompt: "a chest x-ray with fibrosis"
+  prior_prompt: "a chest x-ray"
+  
+  # Training parameters
+  repeats_per_target: 10  # Each fibrosis image repeated 10 times with different healthy priors
+  num_epochs: 20  # Reduced from 20 for faster training
+  batch_size: 6  # Increased from 4 for 8GB VRAM
+  learning_rate: 0.0001
+  gradient_accumulation_steps: 1
+  
+  # LoRA settings
+  lora:
+    rank: 64
+    alpha: 64
+    dropout: 0.1
+    target_modules: ["to_k", "to_q", "to_v", "to_out.0"]
+    
+  # Image settings
+  resolution: 512
+  center_crop: true
+  random_flip: false  # Medical images should not be flipped
+  
+  # Validation and checkpointing
+  save_steps: 250          # Save checkpoint every 250 steps (more frequent)
+  validation_steps: 1000   # Generate validation images every 1000 steps (after checkpoints)
+  num_validation_images: 4
+  validation_prompt: "a chest x-ray with fibrosis"
+  
+  # Mixed precision and optimization
+  mixed_precision: "fp16"
+  enable_xformers_memory_efficient_attention: true
+  gradient_checkpointing: true
+  dataloader_num_workers: 2  # Reduce from default 4 to save memory
+  pin_memory: false  # Disable to save VRAM
+  
+  # Noise scheduler
+  noise_scheduler: "ddpm"
+  beta_start: 0.00085
+  beta_end: 0.012
+  beta_schedule: "scaled_linear"
+  num_train_timesteps: 1000
+  
+paths:
+  output_dir: "outputs/diffusion_fibrosis_prior"
+  logging_dir: "outputs/diffusion_fibrosis_prior/logs"
+  
+experiment:
+  name: "fibrosis_prior_lora"
+  tags: ["fibrosis", "prior_based", "medical", "lora"]
+  
+logging:
+  report_to: "tensorboard"
+  log_level: "INFO"
+
+# Seed for reproducibility
+seed: 42

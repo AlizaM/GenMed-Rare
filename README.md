@@ -8,13 +8,27 @@ This project addresses the challenge of medical image classification for rare di
 
 ## Current Implementation Status ✅
 
-### ✅ Complete Diffusion Pipeline
-- **Model**: Stable Diffusion 1.5 with LoRA fine-tuning (PEFT)
-- **Dataset**: Balanced chest X-ray dataset (10,541 images, 15 pathology classes)
-- **Training**: HuggingFace Diffusers with mixed precision, gradient checkpointing, and comprehensive logging
+### ✅ Prior-based Diffusion Training
+- **Medical Model**: `danyalmalik/stable-diffusion-chest-xray` (pre-trained on chest X-rays)
+- **Custom VAE**: `stabilityai/sd-vae-ft-mse` (fine-tuned for detail preservation)
+- **Prior-based Learning**: Each pathology image paired with healthy "prior" images
+- **LoRA Fine-tuning**: 13.3M trainable parameters with PEFT integration
+- **Pure Class Data**: 551 fibrosis + 234 pneumonia + 1,000 healthy images (train/val only)
+- **Conditional Training**: "a chest x-ray with fibrosis" vs "a chest x-ray"
+- **Robust Checkpointing**: Frequent checkpoints (every 250 steps) with validation safety
+
+### ✅ Complete Diffusion Pipeline  
+- **Training**: HuggingFace Diffusers with mixed precision, gradient checkpointing
 - **Resume Support**: Full checkpoint resume functionality with automatic latest detection
-- **Validation**: Real-time sample generation and FID score tracking
+- **Validation**: Real-time sample generation with error handling
 - **Output**: Production-ready LoRA adapters for medical image synthesis
+- **Memory Optimized**: Works on 8GB VRAM with batch size optimizations
+
+### ✅ Pure Class Dataset Organization
+- **Data Extraction**: Pure single-pathology images from NIH dataset
+- **Train/Val Split**: Respects official NIH train_val_list.txt (excludes test images)
+- **Healthy Images**: Curated from diffusion dataset (verified "No Finding" labels)
+- **Folder Structure**: Organized by pathology class for easy access
 
 ### ✅ Classification Pipeline
 - **Dataset**: NIH Chest X-ray (filtered for target pathologies)
@@ -35,7 +49,9 @@ This project addresses the challenge of medical image classification for rare di
 GenMed-Rare/
 ├── configs/                    # YAML configuration files
 │   ├── config.yaml            # Main training configuration (Effusion vs Fibrosis)
-│   ├── config_diffusion.yaml  # Diffusion model training configuration
+│   ├── config_diffusion.yaml  # Original diffusion model training
+│   ├── config_diffusion_fibrosis.yaml # NEW: Prior-based fibrosis training (20 epochs)
+│   ├── config_diffusion_test.yaml     # NEW: Quick test config (1 epoch, fast validation)
 │   └── config_test.yaml       # Quick test configuration (small dataset)
 ├── data/
 │   ├── raw/                   # Raw data (download separately)
@@ -59,6 +75,13 @@ GenMed-Rare/
 │   │   └── effusion_fibrosis/
 │   │       ├── dataset.csv         # Unified dataset with split column
 │   │       └── dataset_test.csv    # Small test dataset (320 images)
+│   ├── pure_class_folders/    # Pure single-pathology datasets (train/val only)
+│   │   ├── fibrosis_images.csv    # 551 pure fibrosis images metadata
+│   │   ├── fibrosis/              # Pure fibrosis image files
+│   │   ├── pneumonia_images.csv   # 234 pure pneumonia images metadata  
+│   │   ├── pneumonia/             # Pure pneumonia image files
+│   │   ├── healthy_images.csv     # 1,000 healthy images metadata
+│   │   └── healthy/               # Healthy image files (from diffusion dataset)
 │   └── diffusion_data/        # Diffusion training data
 │       └── diffusion_data_balanced/  # Balanced dataset for diffusion training
 │           ├── diffusion_dataset_balanced.csv  # Image metadata
@@ -93,12 +116,13 @@ GenMed-Rare/
 ├── scripts/                   # Executable scripts
 │   ├── filter_and_organize_data.py  # Extract & organize NIH dataset
 │   ├── train_classifier.py          # Classification training entry point
-│   ├── train_diffusion.py           # Diffusion model training with resume support
-│   ├── test_training_diffusion.py   # Diffusion pipeline validation (--no-training flag available)
-│   ├── test_resume_demo.py          # Checkpoint resume demonstration and verification
-│   ├── create_test_dataset.py       # Create small test dataset for quick validation
-│   ├── test_training.py             # Quick classification training test
-│   ├── verify_and_fix_images.py     # Image integrity verification
+│   ├── train_diffusion.py           # Original diffusion model training
+│   ├── train_diffusion_prior.py     # NEW: Prior-based diffusion training for pathologies
+│   ├── create_pure_class_folders.py # NEW: Create pure class datasets from NIH data
+│   ├── test_training_diffusion.py   # Diffusion pipeline validation
+│   ├── test_resume_demo.py          # Checkpoint resume demonstration
+│   ├── create_test_dataset.py       # Create small test dataset
+│   └── test_training.py             # Quick classification training test
 │   └── diagnose_missing_images.py   # Debug missing image files
 ├── tests/                     # Comprehensive pytest test suite (174 tests)
 │   ├── test_config.py        # Configuration management tests
@@ -220,7 +244,49 @@ python scripts/train_classifier.py --config configs/config.yaml
 tensorboard --logdir=outputs/<experiment_name>/logs
 ```
 
-#### Diffusion Model Training
+#### Prior-Based Diffusion Training (NEW)
+
+Train pathology-specific diffusion models using healthy images as "priors":
+
+```bash
+# 1. Create pure class datasets from NIH data
+python scripts/create_pure_class_folders.py --copy-images
+
+# This creates:
+# data/pure_class_folders/fibrosis/     (551 pure fibrosis images)
+# data/pure_class_folders/pneumonia/    (234 pure pneumonia images)  
+# data/pure_class_folders/healthy/      (1,000 healthy images)
+
+# 2. Train fibrosis generator with prior-based learning
+python scripts/train_diffusion_prior.py --config configs/config_diffusion_fibrosis.yaml
+
+# 3. Resume training from checkpoint
+python scripts/train_diffusion_prior.py --config configs/config_diffusion_fibrosis.yaml --resume-latest
+
+# 4. Quick test (fast validation of setup)
+python scripts/train_diffusion_prior.py --config configs/config_diffusion_test.yaml
+
+# 5. Monitor progress  
+tensorboard --logdir=outputs/diffusion_fibrosis_prior/logs
+```
+
+**Prior-Based Training Features:**
+- ✅ **Medical Model**: `danyalmalik/stable-diffusion-chest-xray` (chest X-ray specific)
+- ✅ **Custom VAE**: `stabilityai/sd-vae-ft-mse` (fine-grained detail preservation)
+- ✅ **Prior Learning**: Each fibrosis image paired with different healthy "priors"
+- ✅ **Conditioning**: "a chest x-ray with fibrosis" vs "a chest x-ray"
+- ✅ **Data Repeats**: 10× repetitions (551 → 5,510 training samples)
+- ✅ **Robust Checkpointing**: Every 250 steps with validation safety
+- ✅ **Error Handling**: Validation failures won't stop training
+- ✅ **Memory Optimized**: Batch size 6 for 8GB VRAM
+
+**Training Progress:**
+- **Duration**: ~31 hours for full 20 epochs (27,560 steps)
+- **Checkpoints**: Auto-saved every 250 steps (110 total checkpoints)  
+- **Validation**: Generated images every 1,000 steps (4 samples each)
+- **Resume Support**: Full state preservation with step-exact continuation
+
+#### Standard Diffusion Training
 
 **Prerequisites**: 
 - Balanced diffusion dataset in: `data/diffusion_data/diffusion_data_balanced/`
@@ -369,6 +435,43 @@ pytest>=7.4.0
 scikit-learn>=1.3.0
 scikit-image>=0.21.0
 ```
+
+## Quick Start: Fibrosis Generator Training
+
+To immediately start training a fibrosis-specific diffusion model:
+
+```bash
+# 1. Activate environment
+source .venv/bin/activate
+
+# 2. Create pure class datasets
+python scripts/create_pure_class_folders.py --copy-images
+# ✅ Creates 551 fibrosis + 234 pneumonia + 1,000 healthy images
+
+# 3. Start fibrosis training (full 20 epochs)
+python scripts/train_diffusion_prior.py --config configs/config_diffusion_fibrosis.yaml
+
+# 4. Monitor progress
+tensorboard --logdir=outputs/diffusion_fibrosis_prior/logs
+```
+
+**Expected Training:**
+- **Duration**: ~31 hours (27,560 steps)
+- **First checkpoint**: Step 250 (~17 minutes) 
+- **First validation**: Step 1,000 (~1.1 hours)
+- **Memory usage**: ~6-7GB VRAM
+- **Output**: LoRA weights in `outputs/diffusion_fibrosis_prior/lora_weights/`
+
+**Resume Training:**
+```bash
+# Resume from latest checkpoint (if interrupted)
+python scripts/train_diffusion_prior.py --config configs/config_diffusion_fibrosis.yaml --resume-latest
+
+# Resume from specific step
+python scripts/train_diffusion_prior.py --config configs/config_diffusion_fibrosis.yaml --resume-step 5000
+```
+
+---
 
 ## Contributing
 
