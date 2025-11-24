@@ -72,6 +72,16 @@ def load_pipeline(
         safety_checker=None,
     )
     
+    # Replace scheduler with DDIM for efficient inference
+    # DDIM is trained with the same process as DDPM but enables faster sampling
+    # The pretrained model uses PNDMScheduler, but we want DDIM for deterministic, efficient generation
+    from diffusers import DDIMScheduler
+    pipeline.scheduler = DDIMScheduler.from_pretrained(
+        pretrained_model,
+        subfolder="scheduler"
+    )
+    print(f"✓ Using DDIMScheduler for efficient inference (compatible with DDPM training)")
+    
     # Detect checkpoint format
     has_adapter_config = (checkpoint_path / "adapter_config.json").exists()
     has_model_safetensors = (checkpoint_path / "model.safetensors").exists()
