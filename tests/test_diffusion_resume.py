@@ -196,15 +196,20 @@ class TestConfigValidation:
     
     def test_config_has_model_section(self):
         """Test that config has required model section."""
-        config_path = Path("configs/config_diffusion.yaml")
+        config_path = Path("configs/config_diffusion_fibrosis.yaml")
         if config_path.exists():
             config = load_config(str(config_path))
             assert 'model' in config
-            assert 'use_lora' in config['model']
+            # Prior-based config uses LoRA in training.lora section
+            assert 'training' in config
+            assert 'lora' in config['training']
     
     def test_mock_config_valid(self, mock_config):
         """Test that mock config has required fields."""
         assert 'model' in mock_config
+        # Old configs had use_lora at model level
+        # New configs have lora settings at training.lora level
+        # Mock config still uses old structure for testing resume logic
         assert 'use_lora' in mock_config['model']
         assert mock_config['model']['use_lora'] == True
 
@@ -293,17 +298,17 @@ class TestIntegrationWithTrainingScript:
     
     def test_config_loading(self):
         """Test that training config can be loaded."""
-        config_path = Path("configs/config_diffusion.yaml")
+        config_path = Path("configs/config_diffusion_fibrosis.yaml")
         if config_path.exists():
             config = load_config(str(config_path))
             
-            # Verify checkpoint directory is configured
-            assert 'training' in config
-            assert 'checkpoint_dir' in config['training']
+            # Verify output/checkpoint paths are configured
+            assert 'paths' in config
+            assert 'output_dir' in config['paths']
             
-            checkpoint_dir = Path(config['training']['checkpoint_dir'])
+            output_dir = Path(config['paths']['output_dir'])
             # Directory might not exist yet, but parent should be valid
-            assert checkpoint_dir.parent.exists() or str(checkpoint_dir).startswith('outputs/')
+            assert output_dir.parent.exists() or str(output_dir).startswith('outputs/')
 
 
 class TestErrorHandling:

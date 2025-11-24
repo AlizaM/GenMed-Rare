@@ -1,333 +1,236 @@
 """
-Integration test for diffusion model training pipeline.
-
-This test verifies that the training script can:
-- Load models and data
-- Run a few training steps
-- Save checkpoints
-- Generate validation images
+Tests for prior-based diffusion training configuration and integration.
 
 Run with:
-    pytest tests/test_diffusion_training.py -v -s
+    pytest tests/test_diffusion_training.py -v
 """
 
 import pytest
-import torch
 import yaml
-import shutil
 from pathlib import Path
-import tempfile
 import sys
 
 # Add project root to path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.data.diffusion_dataset import ChestXrayDiffusionDataset, collate_fn
-
 
 @pytest.fixture
-def temp_output_dir():
-    """Create temporary output directory for test."""
-    temp_dir = tempfile.mkdtemp(prefix="test_diffusion_")
-    yield Path(temp_dir)
-    # Cleanup
-    shutil.rmtree(temp_dir, ignore_errors=True)
+def training_config():
+    """Load prior-based training config for fibrosis."""
+    config_path = Path("configs/config_diffusion_fibrosis.yaml")
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
 
 
-@pytest.fixture
-def test_config(temp_output_dir):
-    """Create a minimal test config for quick training."""
-    config = {
-        'experiment': {
-            'name': 'test_diffusion',
-            'seed': 42,
-        },
-        'data': {
-            'data_dir': 'data/diffusion_data',
-            'csv_file': 'diffusion_dataset_balanced.csv',
-            'image_size': 512,
-            'center_crop': True,
-            'random_flip': False,
-            'prompt_template': 'A chest X-ray with {labels}',
-        },
-        'model': {
-            'pretrained_model': 'runwayml/stable-diffusion-v1-5',
-            'use_lora': True,
-            'lora_rank': 4,
-            'lora_alpha': 4,
-            'lora_dropout': 0.0,
-            'lora_bias': 'none',
-            'lora_target_modules': ['to_q', 'to_k', 'to_v', 'to_out.0'],
-        },
-        'training': {
-            'num_train_epochs': 1,  # Just 1 epoch for testing
-            'train_batch_size': 1,
-            'gradient_accumulation_steps': 1,
-            'learning_rate': 0.0001,
-            'lr_scheduler': 'constant',
-            'lr_warmup_steps': 0,
-            'optimizer': 'adamw',
-            'adam_beta1': 0.9,
-            'adam_beta2': 0.999,
-            'adam_weight_decay': 0.01,
-            'adam_epsilon': 1e-8,
-            'max_grad_norm': 1.0,
-            'use_8bit_adam': False,
-            'gradient_checkpointing': True,
-            'mixed_precision': 'no',  # Use fp32 for testing
-            'save_steps': 5,  # Save after 5 steps
-            'checkpoint_dir': str(temp_output_dir / 'checkpoints'),
-            'logging_steps': 1,
-            'log_dir': str(temp_output_dir / 'logs'),
-            'use_tensorboard': False,  # Disable for test
-            'validation_steps': 10,  # Disable validation for speed
-            'num_validation_images': 1,
-            'validation_prompt': 'A chest X-ray with Fibrosis',
-            'num_workers': 0,  # No multiprocessing for test
-            'dataloader_num_workers': 0,
-        },
-        'generation': {
-            'num_inference_steps': 20,  # Fewer steps for testing
-            'guidance_scale': 7.5,
-            'negative_prompt': 'blurry',
-            'output_dir': str(temp_output_dir / 'generated'),
-            'num_images_per_prompt': 1,
-            'batch_size': 1,
-        },
-        'hardware': {
-            'device': 'cpu',  # Use CPU for testing (GPU too slow to download models)
-            'enable_xformers': False,
-            'enable_attention_slicing': True,
-            'enable_vae_slicing': True,
-        }
-    }
-    
-    # Save config to temp file
-    config_path = temp_output_dir / 'test_config.yaml'
-    with open(config_path, 'w') as f:
-        yaml.dump(config, f)
-    
-    return config, config_path
-
-
-class TestDiffusionDatasetIntegration:
-    """Test dataset integration with training pipeline."""
-    
-    def test_dataset_loads_for_training(self):
-        """Test that dataset can be loaded for training."""
-        config_path = Path("configs/config_diffusion.yaml")
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        
-        dataset = ChestXrayDiffusionDataset(
-            csv_file=str(Path(config['data']['data_dir']) / config['data']['csv_file']),
-            data_dir=config['data']['data_dir'],
-            image_size=config['data']['image_size'],
-            prompt_template=config['data']['prompt_template'],
-            center_crop=config['data']['center_crop'],
-            random_flip=config['data']['random_flip'],
-        )
-        
-        assert len(dataset) > 0
-    
-    def test_dataset_compatible_with_dataloader(self):
-        """Test that dataset works with PyTorch DataLoader."""
-        from torch.utils.data import DataLoader
-        
-        config_path = Path("configs/config_diffusion.yaml")
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        
-        dataset = ChestXrayDiffusionDataset(
-            csv_file=str(Path(config['data']['data_dir']) / config['data']['csv_file']),
-            data_dir=config['data']['data_dir'],
-            image_size=config['data']['image_size'],
-            prompt_template=config['data']['prompt_template'],
-            center_crop=config['data']['center_crop'],
-            random_flip=config['data']['random_flip'],
-        )
-        
-        dataloader = DataLoader(
-            dataset,
-            batch_size=2,
-            shuffle=False,
-            num_workers=0,
-            collate_fn=collate_fn,
-        )
-        
-        batch = next(iter(dataloader))
-        
-        assert 'pixel_values' in batch
-        assert 'text' in batch
-        assert batch['pixel_values'].shape[0] == 2
-
-
-@pytest.mark.slow
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU required for full training test")
-class TestDiffusionTrainingPipeline:
-    """Integration tests for complete training pipeline (requires GPU)."""
-    
-    def test_training_saves_checkpoint(self, test_config, temp_output_dir):
-        """Test that training runs and saves checkpoints."""
-        config, config_path = test_config
-        
-        # This would require importing and running the full training script
-        # For now, we'll test the components separately
-        
-        checkpoint_dir = Path(config['training']['checkpoint_dir'])
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Verify directory was created
-        assert checkpoint_dir.exists()
-        
-        # In a real test, we would:
-        # 1. Import train_diffusion
-        # 2. Run training for a few steps
-        # 3. Check that checkpoint was saved
-        
-        # For now, just verify the test setup works
-        assert config['training']['num_train_epochs'] == 1
-        assert config['training']['save_steps'] == 5
-
-
-class TestDiffusionCheckpointStructure:
-    """Test checkpoint saving and loading structure."""
-    
-    def test_checkpoint_directory_structure(self, temp_output_dir):
-        """Test that checkpoint directory can be created."""
-        checkpoint_dir = temp_output_dir / 'checkpoints' / 'checkpoint-100'
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        
-        assert checkpoint_dir.exists()
-        assert checkpoint_dir.is_dir()
-    
-    def test_can_save_dummy_checkpoint(self, temp_output_dir):
-        """Test that we can save a dummy checkpoint."""
-        import torch
-        
-        checkpoint_dir = temp_output_dir / 'checkpoints' / 'checkpoint-test'
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Save a dummy checkpoint
-        dummy_state = {'step': 100, 'loss': 0.5}
-        checkpoint_path = checkpoint_dir / 'checkpoint.pth'
-        torch.save(dummy_state, checkpoint_path)
-        
-        # Verify it was saved
-        assert checkpoint_path.exists()
-        
-        # Load it back
-        loaded_state = torch.load(checkpoint_path, map_location='cpu')
-        assert loaded_state['step'] == 100
-        assert loaded_state['loss'] == 0.5
-
-
-class TestDiffusionConfigValidation:
-    """Test that diffusion config is valid for training."""
+class TestPriorBasedTrainingConfig:
+    """Test prior-based training configuration."""
     
     def test_config_file_exists(self):
-        """Test that config file exists."""
-        config_path = Path("configs/config_diffusion.yaml")
+        """Test that prior-based training config exists."""
+        config_path = Path("configs/config_diffusion_fibrosis.yaml")
         assert config_path.exists()
     
-    def test_config_has_required_fields(self):
-        """Test that config has all required fields."""
-        config_path = Path("configs/config_diffusion.yaml")
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        
-        # Check top-level sections
-        assert 'experiment' in config
-        assert 'data' in config
-        assert 'model' in config
-        assert 'training' in config
-        assert 'generation' in config
-        assert 'hardware' in config
+    def test_config_loads(self, training_config):
+        """Test that config loads successfully."""
+        assert training_config is not None
     
-    def test_config_data_paths_valid(self):
-        """Test that data paths in config are valid."""
-        config_path = Path("configs/config_diffusion.yaml")
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        
-        data_dir = Path(config['data']['data_dir'])
-        csv_file = config['data']['csv_file']
-        
-        # Data directory should exist
-        assert data_dir.exists(), f"Data directory not found: {data_dir}"
-        
-        # CSV file should exist
-        csv_path = data_dir / csv_file
-        assert csv_path.exists(), f"CSV file not found: {csv_path}"
+    def test_has_required_sections(self, training_config):
+        """Test that config has all required sections."""
+        assert 'model' in training_config
+        assert 'training' in training_config
+        assert 'paths' in training_config
+        assert 'experiment' in training_config
+        assert 'logging' in training_config
     
-    def test_config_model_settings_valid(self):
-        """Test that model settings are valid."""
-        config_path = Path("configs/config_diffusion.yaml")
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        
-        model = config['model']
-        
-        assert model['use_lora'] == True
-        assert model['lora_rank'] > 0
-        assert model['lora_alpha'] > 0
-        assert isinstance(model['lora_target_modules'], list)
-        assert len(model['lora_target_modules']) > 0
+    def test_training_mode_is_prior_based(self, training_config):
+        """Test that training mode is set to prior_based."""
+        assert training_config['training']['mode'] == 'prior_based'
     
-    def test_config_training_settings_valid(self):
-        """Test that training settings are valid."""
-        config_path = Path("configs/config_diffusion.yaml")
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
+    def test_has_target_pathology(self, training_config):
+        """Test that target pathology is specified."""
+        assert 'target_pathology' in training_config['training']
+        assert training_config['training']['target_pathology'] == 'fibrosis'
+    
+    def test_has_data_paths(self, training_config):
+        """Test that config has all required data paths."""
+        training = training_config['training']
         
-        training = config['training']
+        assert 'target_images_dir' in training
+        assert 'target_images_csv' in training
+        assert 'prior_images_dir' in training
+        assert 'prior_images_csv' in training
+    
+    def test_has_prompts(self, training_config):
+        """Test that config has target and prior prompts."""
+        training = training_config['training']
         
-        assert training['num_train_epochs'] > 0
-        assert training['train_batch_size'] > 0
-        assert training['gradient_accumulation_steps'] > 0
+        assert 'target_prompt' in training
+        assert 'prior_prompt' in training
+        
+        # Verify prompt content
+        assert 'fibrosis' in training['target_prompt'].lower()
+        assert training['prior_prompt'] == "a chest x-ray"
+    
+    def test_has_lora_configuration(self, training_config):
+        """Test that LoRA configuration is present and valid."""
+        training = training_config['training']
+        
+        assert 'lora' in training
+        lora = training['lora']
+        
+        assert 'rank' in lora
+        assert 'alpha' in lora
+        assert 'dropout' in lora
+        assert 'target_modules' in lora
+        
+        # Verify values are reasonable
+        assert lora['rank'] > 0
+        assert lora['alpha'] > 0
+        assert 0 <= lora['dropout'] <= 1
+        assert isinstance(lora['target_modules'], list)
+        assert len(lora['target_modules']) > 0
+    
+    def test_has_training_parameters(self, training_config):
+        """Test that training parameters are configured."""
+        training = training_config['training']
+        
+        assert 'num_epochs' in training
+        assert 'batch_size' in training
+        assert 'learning_rate' in training
+        assert 'gradient_accumulation_steps' in training
+        assert 'repeats_per_target' in training
+        
+        # Verify values are reasonable
+        assert training['num_epochs'] > 0
+        assert training['batch_size'] > 0
         assert training['learning_rate'] > 0
+        assert training['gradient_accumulation_steps'] > 0
+        assert training['repeats_per_target'] > 0
+    
+    def test_has_image_settings(self, training_config):
+        """Test that image settings are configured."""
+        training = training_config['training']
+        
+        assert 'resolution' in training
+        assert 'center_crop' in training
+        assert 'random_flip' in training
+        
+        assert training['resolution'] in [256, 512, 1024]  # Common sizes
+        assert training['random_flip'] == False  # Medical images shouldn't flip
+    
+    def test_has_checkpoint_settings(self, training_config):
+        """Test that checkpoint and validation settings are configured."""
+        training = training_config['training']
+        
+        assert 'save_steps' in training
+        assert 'validation_steps' in training
+        assert 'num_validation_images' in training
+        assert 'validation_prompt' in training
+        
         assert training['save_steps'] > 0
+        assert training['validation_steps'] > 0
+        assert training['num_validation_images'] > 0
+    
+    def test_has_model_configuration(self, training_config):
+        """Test that model configuration is present."""
+        model = training_config['model']
+        
+        assert 'pretrained_model' in model
+        assert isinstance(model['pretrained_model'], str)
+        assert len(model['pretrained_model']) > 0
+    
+    def test_has_output_paths(self, training_config):
+        """Test that output paths are configured."""
+        paths = training_config['paths']
+        
+        assert 'output_dir' in paths
+        assert 'logging_dir' in paths
+        
+        # Verify paths use outputs/ directory
+        assert 'outputs/' in paths['output_dir']
+    
+    def test_has_experiment_info(self, training_config):
+        """Test that experiment information is configured."""
+        experiment = training_config['experiment']
+        
+        assert 'name' in experiment
+        assert 'tags' in experiment
+        
+        assert isinstance(experiment['tags'], list)
+        assert len(experiment['tags']) > 0
+    
+    def test_has_seed(self, training_config):
+        """Test that random seed is configured for reproducibility."""
+        assert 'seed' in training_config
+        assert isinstance(training_config['seed'], int)
 
 
-class TestDiffusionModelComponents:
-    """Test individual model components can be loaded."""
+class TestDataPathsExistence:
+    """Test that data paths in config actually exist."""
     
-    @pytest.mark.slow
-    def test_can_import_diffusers(self):
-        """Test that diffusers library is installed."""
-        try:
-            import diffusers
-            assert diffusers is not None
-        except ImportError:
-            pytest.skip("diffusers not installed")
+    def test_target_data_exists(self, training_config):
+        """Test that target (fibrosis) data exists."""
+        training = training_config['training']
+        
+        target_dir = Path(training['target_images_dir'])
+        target_csv = Path(training['target_images_csv'])
+        
+        # These should exist for training to work
+        if not target_dir.exists():
+            pytest.skip(f"Target data directory not found: {target_dir}")
+        if not target_csv.exists():
+            pytest.skip(f"Target CSV not found: {target_csv}")
+        
+        assert target_dir.exists()
+        assert target_dir.is_dir()
+        assert target_csv.exists()
+        assert target_csv.is_file()
     
-    @pytest.mark.slow
-    def test_can_import_peft(self):
-        """Test that peft library is installed."""
-        try:
-            import peft
-            assert peft is not None
-        except ImportError:
-            pytest.skip("peft not installed")
+    def test_prior_data_exists(self, training_config):
+        """Test that prior (healthy) data exists."""
+        training = training_config['training']
+        
+        prior_dir = Path(training['prior_images_dir'])
+        prior_csv = Path(training['prior_images_csv'])
+        
+        if not prior_dir.exists():
+            pytest.skip(f"Prior data directory not found: {prior_dir}")
+        if not prior_csv.exists():
+            pytest.skip(f"Prior CSV not found: {prior_csv}")
+        
+        assert prior_dir.exists()
+        assert prior_dir.is_dir()
+        assert prior_csv.exists()
+        assert prior_csv.is_file()
+
+
+class TestEvaluationConfig:
+    """Test evaluation configuration."""
     
-    @pytest.mark.slow
-    def test_can_import_accelerate(self):
-        """Test that accelerate library is installed."""
-        try:
-            import accelerate
-            assert accelerate is not None
-        except ImportError:
-            pytest.skip("accelerate not installed")
+    def test_eval_config_exists(self):
+        """Test that evaluation config exists."""
+        config_path = Path("configs/config_eval_fibrosis.yaml")
+        assert config_path.exists()
     
-    @pytest.mark.slow
-    def test_can_import_transformers(self):
-        """Test that transformers library is installed."""
-        try:
-            import transformers
-            assert transformers is not None
-        except ImportError:
-            pytest.skip("transformers not installed")
+    def test_eval_config_loads(self):
+        """Test that evaluation config loads successfully."""
+        config_path = Path("configs/config_eval_fibrosis.yaml")
+        
+        from src.config.diffusion_config import load_diffusion_eval_config
+        config = load_diffusion_eval_config(str(config_path))
+        
+        assert config is not None
+    
+    def test_eval_config_has_label_subdir(self):
+        """Test that evaluation config has label_subdir for nested structure."""
+        config_path = Path("configs/config_eval_fibrosis.yaml")
+        
+        from src.config.diffusion_config import load_diffusion_eval_config
+        config = load_diffusion_eval_config(str(config_path))
+        
+        assert hasattr(config.data, 'label_subdir')
+        assert config.data.label_subdir == "fibrosis"
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])
+    pytest.main([__file__, "-v"])
