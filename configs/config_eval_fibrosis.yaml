@@ -1,0 +1,78 @@
+# Evaluation Configuration for Fibrosis Diffusion Model
+# 
+# This config is for evaluating the fibrosis prior-based diffusion model.
+# All paths are configured for the server environment.
+# To evaluate pneumonia instead, change 'label' to 'Pneumonia' and update paths.
+
+evaluation:
+  # Label to evaluate (used in prompts and output naming)
+  label: "Fibrosis"
+  
+  # Checkpoint configuration
+  # Base directory where all checkpoints are stored
+  checkpoint_dir: "/w/20251/alizat/diffusion_outputs/fibrosis_prior_job_16022"
+  
+  # List of specific checkpoints to evaluate
+  # Format: checkpoint-step-{step_number}
+  checkpoint_names:
+    - "checkpoint-6750"
+    - "checkpoint-6250"
+    - "checkpoint-5000"
+  
+  # Output directory for evaluation results
+  output_dir: "/w/20251/alizat/checkpoint_evaluation_fibrosis_16022"
+
+data:
+  # Data directory containing CSV and label subdirectories
+  # Structure: data_dir/
+  #            ├── fibrosis_images.csv
+  #            └── fibrosis/
+  #                └── 00000001_000.png
+  data_dir: "/u/alizat/cv_project/GenMed-Rare/data/pure_class_folders"
+  
+  # CSV file with image metadata (located in data_dir)
+  csv_file: "fibrosis_images.csv"
+  
+  # Label subdirectory name (where actual images are stored)
+  # Images will be loaded from: data_dir/label_subdir/{filename}
+  label_subdir: "fibrosis"
+  
+  # Image preprocessing
+  image_size: 512
+  center_crop: true
+  random_flip: false  # Medical images should not be flipped
+  
+  # Prompt template (use {labels} placeholder)
+  prompt_template: "A chest X-ray showing fibrosis"
+
+model:
+  # Pretrained base model
+  pretrained_model: "danyalmalik/stable-diffusion-chest-xray"
+
+generation:
+  # Number of images to generate per checkpoint for evaluation
+  num_images: 100
+  
+  # Inference parameters
+  num_inference_steps: 50
+  guidance_scale: 7.5
+  negative_prompt: "blurry, low quality, distorted, artifacts"
+
+hardware:
+  # Memory optimizations
+  enable_attention_slicing: true
+  enable_vae_slicing: true
+  
+  # Device (auto-detected if not specified)
+  device: "cuda"
+
+# Evaluation metrics configuration
+metrics:
+  # Novelty metric (similarity to training set)
+  novelty_metric: "ssim"  # Options: "ssim" or "correlation"
+  
+  # Visualization settings
+  visualize_top_k: 10  # Number of most similar pairs to visualize
+  
+  # Random seed for reproducibility
+  seed: 42

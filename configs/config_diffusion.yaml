@@ -75,6 +75,7 @@ training:
   checkpoint_dir: "outputs/diffusion_models/chest_xray_medical_lora/checkpoints"
   log_dir: "outputs/diffusion_models/chest_xray_medical_lora/logs"
   validation_image_dir: "outputs/diffusion_models/chest_xray_medical_lora/validation_images"
+
   
   # Data loading
   num_workers: 4

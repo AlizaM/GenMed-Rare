@@ -117,8 +117,19 @@ class MetricsConfig:
 class HardwareConfig:
     """Hardware and system configuration."""
     device: str
-    pin_memory: bool
-    deterministic: bool
+    pin_memory: bool = False
+    deterministic: bool = False
+    
+    def __post_init__(self):
+        """Auto-detect CUDA if not available."""
+        import torch
+        if self.device == "cuda" and not torch.cuda.is_available():
+            print("⚠ CUDA requested but not available. Falling back to CPU.")
+            self.device = "cpu"
+        
+        # pin_memory only makes sense when using CUDA
+        if self.device == "cpu":
+            self.pin_memory = False
 
 
 @dataclass

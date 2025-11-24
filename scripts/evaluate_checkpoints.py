@@ -2,43 +2,72 @@
 Evaluate and compare diffusion model checkpoints.
 
 This script:
-1. Generates images from multiple checkpoints for specified labels
-2. Computes SSIM/correlation with training images (novelty metric)
-3. Computes CLIP scores (text-image alignment)
-4. Visualizes most similar image pairs
-5. Produces comparison summary
+1. Loads and validates config using dataclass-based config manager
+2. Generates images from multiple checkpoints
+3. Computes SSIM/correlation with training images (novelty metric)
+4. Computes CLIP scores (text-image alignment)
+5. Visualizes most similar image pairs
+6. Produces comparison summary
 
 Usage:
-    python scripts/evaluate_checkpoints.py \
-        --checkpoints checkpoint-1000 checkpoint-2000 checkpoint-3000 \
-        --labels "Fibrosis" "Pneumonia" \
-        --num-images 100
+    # Run with config file (recommended)
+    python scripts/evaluate_checkpoints.py --config configs/config_eval_fibrosis.yaml
+    
+    # Override specific settings
+    python scripts/evaluate_checkpoints.py --config configs/config_eval_fibrosis.yaml --num-images 200
 """
 
 import argparse
-import yaml
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-import matplotlib.pyplot as plt
-from PIL import Image
+import logging
+
 import torch
-from torch.utils.data import DataLoader
-from torchvision import transforms
-from skimage.metrics import structural_similarity as ssim
-from scipy.stats import pearsonr
-
-# Diffusion imports
-from transformers import CLIPProcessor, CLIPModel
-
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
-from src.data.diffusion_dataset import ChestXrayDiffusionDataset, collate_fn
 
-# Import reusable functions from generate_xrays
-from generate_xrays import setup_pipeline as load_pipeline
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
+from src.config import load_diffusion_eval_config, DiffusionEvaluationConfig
+from src.data.diffusion_dataset import ChestXrayDiffusionDataset
+from src.utils.diffusion_utils import load_pipeline, generate_images
+from src.utils.image_utils import tensor_to_numpy
+from src.eval.metrics import (
+    compute_novelty_metrics,
+    load_clip_model,
+    compute_clip_scores,
+    compute_clip_metrics
+)
+from src.utils.visualization import (
+    visualize_similar_pairs,
+    plot_score_distributions,
+    plot_checkpoint_comparison
+)
+
+
+def fail_fast_message(error_type: str, message: str):
+    """
+    Log a clear error message and exit.
+    
+    Args:
+        error_type: Type of error (e.g., "CHECKPOINT ERROR")
+        message: Detailed error message
+    """
+    logger.error("=" * 80)
+    logger.error(f"ERROR: {error_type}")
+    logger.error("=" * 80)
+    logger.error(message)
+    logger.error("=" * 80)
+    sys.exit(1)
 
 
 def parse_args():
@@ -46,319 +75,108 @@ def parse_args():
     parser.add_argument(
         "--config",
         type=str,
-        default="configs/config_diffusion.yaml",
-        help="Path to config file"
-    )
-    parser.add_argument(
-        "--checkpoints",
-        nargs="+",
-        required=True,
-        help="Checkpoint names (e.g., checkpoint-1000 checkpoint-2000)"
-    )
-    parser.add_argument(
-        "--labels",
-        nargs="+",
-        default=["Fibrosis", "Pneumonia"],
-        help="Labels to generate images for"
+        default="configs/config_eval_fibrosis.yaml",
+        help="Path to evaluation config file"
     )
     parser.add_argument(
         "--num-images",
         type=int,
-        default=100,
-        help="Number of images to generate per label per checkpoint"
-    )
-    parser.add_argument(
-        "--num-inference-steps",
-        type=int,
-        default=50,
-        help="Number of denoising steps"
-    )
-    parser.add_argument(
-        "--guidance-scale",
-        type=float,
-        default=7.5,
-        help="Classifier-free guidance scale"
+        default=None,
+        help="Override number of images to generate per checkpoint"
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/checkpoint_evaluation",
-        help="Output directory for evaluation results"
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed"
+        default=None,
+        help="Override output directory"
     )
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda" if torch.cuda.is_available() else "cpu",
-        help="Device to use"
+        default=None,
+        help="Override device (cuda/cpu)"
     )
     return parser.parse_args()
 
 
-def load_config(config_path: str) -> dict:
-    """Load YAML config."""
-    with open(config_path, 'r') as f:
-        return yaml.safe_load(f)
-
-
-def generate_images_as_numpy(
-    pipeline,
-    prompt: str,
-    num_images: int,
-    num_inference_steps: int,
-    guidance_scale: float,
-    negative_prompt: str,
-    seed: int,
-    device: str
-) -> List[np.ndarray]:
+def load_training_images(config: DiffusionEvaluationConfig) -> List[np.ndarray]:
     """
-    Generate images from prompt and convert to numpy arrays.
+    Load all training images as numpy arrays.
     
-    Note: This wraps the batch generation from generate_xrays.generate_images
-    but converts to individual numpy arrays for evaluation.
+    Args:
+        config: Diffusion evaluation configuration
+    
+    Returns:
+        List of training images as numpy arrays
+    
+    Raises:
+        SystemExit: If dataset loading fails
     """
-    images_np = []
+    logger.info("=" * 80)
+    logger.info("Loading training images...")
+    logger.info("=" * 80)
     
-    for i in range(num_images):
-        generator = torch.Generator(device=device).manual_seed(seed + i)
-        
-        image = pipeline(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            num_images_per_prompt=1,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            generator=generator,
-        ).images[0]
-        
-        # Convert PIL to numpy array
-        images_np.append(np.array(image))
+    csv_path = config.data.data_dir / config.data.csv_file
     
-    return images_np
-
-
-def load_training_images(config: dict) -> List[np.ndarray]:
-    """Load all training images as numpy arrays."""
-    print("Loading training images...")
+    try:
+        dataset = ChestXrayDiffusionDataset(
+            csv_file=str(csv_path),
+            data_dir=str(config.data.data_dir),
+            image_size=config.data.image_size,
+            prompt_template=config.data.prompt_template,
+            center_crop=config.data.center_crop,
+            random_flip=config.data.random_flip,
+            label_subdir=config.data.label_subdir,
+        )
+    except FileNotFoundError as e:
+        fail_fast_message(
+            "DATA LOADING ERROR",
+            f"Failed to load dataset\n"
+            f"  CSV file: {csv_path}\n"
+            f"  Error: {e}\n\n"
+            f"  This script requires the dataset to exist.\n"
+            f"  Please verify:\n"
+            f"    1. Data directory exists: {config.data.data_dir}\n"
+            f"    2. CSV file exists: {csv_path}\n"
+            f"    3. Images are in the data directory"
+        )
+    except Exception as e:
+        fail_fast_message(
+            "DATA LOADING ERROR",
+            f"Unexpected error loading dataset: {e}"
+        )
     
-    dataset = ChestXrayDiffusionDataset(
-        csv_file=str(Path(config['data']['data_dir']) / config['data']['csv_file']),
-        data_dir=config['data']['data_dir'],
-        image_size=config['data']['image_size'],
-        prompt_template=config['data']['prompt_template'],
-        center_crop=config['data']['center_crop'],
-        random_flip=config['data']['random_flip'],
-    )
+    if len(dataset) == 0:
+        fail_fast_message(
+            "DATA LOADING ERROR",
+            f"Dataset is empty!\n"
+            f"  CSV file: {csv_path}\n"
+            f"  Please verify the CSV file contains valid entries."
+        )
+    
+    logger.info(f"Dataset loaded: {len(dataset)} images")
     
     training_images = []
-    for i in tqdm(range(len(dataset)), desc="Loading training images"):
+    for i in tqdm(range(len(dataset)), desc="Converting to numpy"):
         sample = dataset[i]
         # Convert from tensor [-1, 1] to numpy [0, 255]
-        img_tensor = sample['pixel_values']
-        img_np = ((img_tensor.permute(1, 2, 0).numpy() + 1) * 127.5).astype(np.uint8)
+        img_np = tensor_to_numpy(sample['pixel_values'])
         training_images.append(img_np)
+    
+    logger.info(f"✓ Loaded {len(training_images)} training images")
     
     return training_images
 
 
-def compute_ssim(img1: np.ndarray, img2: np.ndarray) -> float:
-    """Compute SSIM between two RGB images."""
-    # Convert to grayscale for SSIM
-    if len(img1.shape) == 3:
-        img1_gray = np.mean(img1, axis=2)
-    else:
-        img1_gray = img1
-    
-    if len(img2.shape) == 3:
-        img2_gray = np.mean(img2, axis=2)
-    else:
-        img2_gray = img2
-    
-    # Normalize to [0, 1]
-    img1_gray = img1_gray / 255.0
-    img2_gray = img2_gray / 255.0
-    
-    return ssim(img1_gray, img2_gray, data_range=1.0)
-
-
-def compute_correlation(img1: np.ndarray, img2: np.ndarray) -> float:
-    """Compute pixel-wise correlation between two images."""
-    # Flatten and compute correlation
-    corr, _ = pearsonr(img1.flatten(), img2.flatten())
-    return corr
-
-
-def find_nearest_neighbor(
-    generated_img: np.ndarray,
-    training_images: List[np.ndarray],
-    metric: str = "ssim"
-) -> Tuple[int, float, np.ndarray]:
-    """
-    Find nearest neighbor in training set.
-    
-    Returns:
-        (index, similarity_score, training_image)
-    """
-    best_idx = -1
-    best_score = -np.inf
-    
-    for idx, train_img in enumerate(training_images):
-        if metric == "ssim":
-            score = compute_ssim(generated_img, train_img)
-        elif metric == "correlation":
-            score = compute_correlation(generated_img, train_img)
-        else:
-            raise ValueError(f"Unknown metric: {metric}")
-        
-        if score > best_score:
-            best_score = score
-            best_idx = idx
-    
-    return best_idx, best_score, training_images[best_idx]
-
-
-def compute_novelty_metrics(
-    generated_images: List[np.ndarray],
-    training_images: List[np.ndarray],
-    metric: str = "ssim"
-) -> Dict[str, float]:
-    """
-    Compute novelty metrics for generated images.
-    
-    Returns dict with:
-        - max_similarity: Maximum similarity to any training image
-        - p99_similarity: 99th percentile similarity
-        - mean_similarity: Mean similarity
-        - median_similarity: Median similarity
-        - nn_indices: List of nearest neighbor indices
-        - nn_scores: List of similarity scores
-    """
-    print(f"Computing novelty metrics using {metric}...")
-    
-    nn_scores = []
-    nn_indices = []
-    
-    for gen_img in tqdm(generated_images, desc="Finding nearest neighbors"):
-        nn_idx, nn_score, _ = find_nearest_neighbor(gen_img, training_images, metric)
-        nn_scores.append(nn_score)
-        nn_indices.append(nn_idx)
-    
-    nn_scores = np.array(nn_scores)
-    
-    return {
-        'max_similarity': float(np.max(nn_scores)),
-        'p99_similarity': float(np.percentile(nn_scores, 99)),
-        'p95_similarity': float(np.percentile(nn_scores, 95)),
-        'mean_similarity': float(np.mean(nn_scores)),
-        'median_similarity': float(np.median(nn_scores)),
-        'min_similarity': float(np.min(nn_scores)),
-        'nn_indices': nn_indices,
-        'nn_scores': nn_scores.tolist(),
-    }
-
-
-def load_clip_model(device: str):
-    """Load CLIP model for text-image alignment."""
-    print("Loading CLIP model...")
-    model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-    model = model.to(device)
-    model.eval()
-    return model, processor
-
-
-def compute_clip_scores(
-    images: List[np.ndarray],
-    prompts: List[str],
-    clip_model,
-    clip_processor,
-    device: str
-) -> List[float]:
-    """Compute CLIP scores between images and their prompts."""
-    print("Computing CLIP scores...")
-    
-    scores = []
-    
-    for img, prompt in tqdm(zip(images, prompts), total=len(images), desc="CLIP scoring"):
-        # Convert numpy to PIL
-        pil_img = Image.fromarray(img)
-        
-        # Process
-        inputs = clip_processor(
-            text=[prompt],
-            images=[pil_img],
-            return_tensors="pt",
-            padding=True
-        )
-        
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        
-        # Compute similarity
-        with torch.no_grad():
-            outputs = clip_model(**inputs)
-            logits_per_image = outputs.logits_per_image
-            score = logits_per_image[0, 0].item()
-        
-        scores.append(score)
-    
-    return scores
-
-
-def visualize_similar_pairs(
-    generated_images: List[np.ndarray],
-    training_images: List[np.ndarray],
-    nn_indices: List[int],
-    nn_scores: List[float],
-    output_dir: Path,
-    checkpoint_name: str,
-    label: str,
-    top_k: int = 10
-):
-    """Visualize most similar generated-training image pairs."""
-    print(f"Visualizing top {top_k} most similar pairs...")
-    
-    # Get top k most similar pairs (highest scores)
-    sorted_indices = np.argsort(nn_scores)[::-1][:top_k]
-    
-    fig, axes = plt.subplots(top_k, 2, figsize=(10, 5 * top_k))
-    
-    for i, idx in enumerate(sorted_indices):
-        gen_img = generated_images[idx]
-        train_img = training_images[nn_indices[idx]]
-        score = nn_scores[idx]
-        
-        # Plot generated image
-        axes[i, 0].imshow(gen_img)
-        axes[i, 0].set_title(f"Generated #{idx}")
-        axes[i, 0].axis('off')
-        
-        # Plot most similar training image
-        axes[i, 1].imshow(train_img)
-        axes[i, 1].set_title(f"Training NN (SSIM: {score:.4f})")
-        axes[i, 1].axis('off')
-    
-    plt.suptitle(f"{checkpoint_name} - {label}\nTop {top_k} Most Similar Pairs", fontsize=16)
-    plt.tight_layout()
-    
-    output_path = output_dir / f"{checkpoint_name}_{label}_similar_pairs.png"
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    
-    print(f"Saved visualization to {output_path}")
-
-
 def save_checkpoint_results(
-    results: Dict,
+    results: dict,
     output_dir: Path,
     checkpoint_name: str,
     label: str
 ):
     """Save detailed results for a checkpoint-label combination."""
+    import yaml
+    
     output_file = output_dir / f"{checkpoint_name}_{label}_results.yaml"
     
     # Remove large lists for summary
@@ -367,63 +185,82 @@ def save_checkpoint_results(
     with open(output_file, 'w') as f:
         yaml.dump(summary, f, default_flow_style=False)
     
-    print(f"Saved results to {output_file}")
+    logger.info(f"✓ Saved detailed results to {output_file}")
 
 
-def create_summary_table(all_results: Dict, output_dir: Path):
+def create_summary_table(all_results: dict, output_dir: Path, label: str):
     """Create summary comparison table across all checkpoints."""
-    print("Creating summary table...")
+    logger.info("=" * 80)
+    logger.info("Creating summary table...")
+    logger.info("=" * 80)
     
     rows = []
     for checkpoint_name, checkpoint_data in all_results.items():
-        for label, metrics in checkpoint_data.items():
-            row = {
-                'Checkpoint': checkpoint_name,
-                'Label': label,
-                'Max SSIM': metrics['novelty']['max_similarity'],
-                'P99 SSIM': metrics['novelty']['p99_similarity'],
-                'P95 SSIM': metrics['novelty']['p95_similarity'],
-                'Mean SSIM': metrics['novelty']['mean_similarity'],
-                'Mean CLIP': metrics['clip']['mean_score'],
-                'Median CLIP': metrics['clip']['median_score'],
-                'Min CLIP': metrics['clip']['min_score'],
-                'Max CLIP': metrics['clip']['max_score'],
-            }
-            rows.append(row)
+        if label not in checkpoint_data:
+            continue
+        
+        metrics = checkpoint_data[label]
+        row = {
+            'Checkpoint': checkpoint_name,
+            'Label': label,
+            'Max SSIM': metrics['novelty']['max_similarity'],
+            'P99 SSIM': metrics['novelty']['p99_similarity'],
+            'P95 SSIM': metrics['novelty']['p95_similarity'],
+            'Mean SSIM': metrics['novelty']['mean_similarity'],
+            'Mean CLIP': metrics['clip']['mean_score'],
+            'Median CLIP': metrics['clip']['median_score'],
+            'Min CLIP': metrics['clip']['min_score'],
+            'Max CLIP': metrics['clip']['max_score'],
+        }
+        rows.append(row)
+    
+    if not rows:
+        logger.warning(f"No results to summarize for label: {label}")
+        return None
     
     df = pd.DataFrame(rows)
     
     # Sort by P99 SSIM (lower is better for novelty) and Mean CLIP (higher is better)
-    df['Novelty Rank'] = df.groupby('Label')['P99 SSIM'].rank(ascending=True)
-    df['CLIP Rank'] = df.groupby('Label')['Mean CLIP'].rank(ascending=False)
+    df['Novelty Rank'] = df['P99 SSIM'].rank(ascending=True)
+    df['CLIP Rank'] = df['Mean CLIP'].rank(ascending=False)
     df['Combined Score'] = (df['Novelty Rank'] + df['CLIP Rank']) / 2
     
     # Save to CSV
     csv_path = output_dir / 'checkpoint_comparison.csv'
     df.to_csv(csv_path, index=False)
-    print(f"Saved summary table to {csv_path}")
+    logger.info(f"✓ Saved summary table to {csv_path}")
     
     # Print summary
-    print("\n" + "="*80)
-    print("CHECKPOINT EVALUATION SUMMARY")
-    print("="*80)
-    print(df.to_string(index=False))
-    print("\n" + "="*80)
-    print("BEST CHECKPOINT PER LABEL")
-    print("="*80)
+    logger.info("=" * 80)
+    logger.info("CHECKPOINT EVALUATION SUMMARY")
+    logger.info("=" * 80)
+    logger.info(f"\n{df.to_string(index=False)}")
     
-    for label in df['Label'].unique():
-        label_df = df[df['Label'] == label]
-        best_novelty = label_df.loc[label_df['P99 SSIM'].idxmin()]
-        best_clip = label_df.loc[label_df['Mean CLIP'].idxmax()]
-        best_combined = label_df.loc[label_df['Combined Score'].idxmin()]
-        
-        print(f"\n{label}:")
-        print(f"  Best Novelty (lowest P99 SSIM): {best_novelty['Checkpoint']} (P99={best_novelty['P99 SSIM']:.4f})")
-        print(f"  Best CLIP Alignment: {best_clip['Checkpoint']} (Mean CLIP={best_clip['Mean CLIP']:.2f})")
-        print(f"  Best Combined: {best_combined['Checkpoint']} (Score={best_combined['Combined Score']:.2f})")
+    logger.info("=" * 80)
+    logger.info(f"BEST CHECKPOINT FOR {label}")
+    logger.info("=" * 80)
     
-    print("\n" + "="*80)
+    best_novelty = df.loc[df['P99 SSIM'].idxmin()]
+    best_clip = df.loc[df['Mean CLIP'].idxmax()]
+    best_combined = df.loc[df['Combined Score'].idxmin()]
+    
+    logger.info(f"\nBest Novelty (lowest P99 SSIM):")
+    logger.info(f"  Checkpoint: {best_novelty['Checkpoint']}")
+    logger.info(f"  P99 SSIM: {best_novelty['P99 SSIM']:.4f}")
+    logger.info(f"  Mean CLIP: {best_novelty['Mean CLIP']:.2f}")
+    
+    logger.info(f"\nBest CLIP Alignment (highest Mean CLIP):")
+    logger.info(f"  Checkpoint: {best_clip['Checkpoint']}")
+    logger.info(f"  Mean CLIP: {best_clip['Mean CLIP']:.2f}")
+    logger.info(f"  P99 SSIM: {best_clip['P99 SSIM']:.4f}")
+    
+    logger.info(f"\nBest Combined Score:")
+    logger.info(f"  Checkpoint: {best_combined['Checkpoint']}")
+    logger.info(f"  Combined Score: {best_combined['Combined Score']:.2f}")
+    logger.info(f"  P99 SSIM: {best_combined['P99 SSIM']:.4f}")
+    logger.info(f"  Mean CLIP: {best_combined['Mean CLIP']:.2f}")
+    
+    logger.info("=" * 80)
     
     return df
 
@@ -431,121 +268,192 @@ def create_summary_table(all_results: Dict, output_dir: Path):
 def main():
     args = parse_args()
     
-    # Create output directory
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Load and validate config using config manager
+    logger.info(f"Loading config from: {args.config}")
     
-    # Load config
-    config = load_config(args.config)
+    try:
+        config = load_diffusion_eval_config(args.config)
+    except FileNotFoundError as e:
+        fail_fast_message("CONFIG ERROR", str(e))
+    except ValueError as e:
+        fail_fast_message("CONFIG VALIDATION ERROR", str(e))
+    except Exception as e:
+        fail_fast_message("CONFIG ERROR", f"Unexpected error loading config: {e}")
+    
+    # Apply command-line overrides
+    if args.num_images is not None:
+        config.generation.num_images = args.num_images
+    if args.output_dir is not None:
+        config.evaluation.output_dir = Path(args.output_dir)
+    if args.device is not None:
+        config.hardware.device = args.device
+    
+    # Validate all paths exist (fail-fast)
+    logger.info("=" * 80)
+    logger.info("Validating paths...")
+    logger.info("=" * 80)
+    
+    try:
+        config.validate_paths()
+    except FileNotFoundError as e:
+        fail_fast_message("PATH VALIDATION ERROR", str(e))
+    
+    # Create output directory
+    config.create_dirs()
     
     # Set seed
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
+    torch.manual_seed(config.metrics.seed)
+    np.random.seed(config.metrics.seed)
+    logger.info(f"✓ Random seed set to: {config.metrics.seed}")
+    logger.info(f"✓ Using device: {config.hardware.device}")
     
-    # Load training images (once)
+    # Load training images
     training_images = load_training_images(config)
     
-    # Load CLIP model (once)
-    clip_model, clip_processor = load_clip_model(args.device)
+    # Load CLIP model
+    logger.info("=" * 80)
+    logger.info("Loading CLIP model...")
+    logger.info("=" * 80)
+    clip_model, clip_processor = load_clip_model(config.hardware.device)
+    logger.info("✓ CLIP model loaded")
     
     # Store all results
     all_results = {}
     
+    # Create prompt
+    prompt = config.data.prompt_template.format(labels=config.evaluation.label)
+    
+    logger.info("=" * 80)
+    logger.info("EVALUATION CONFIGURATION")
+    logger.info("=" * 80)
+    logger.info(f"Label: {config.evaluation.label}")
+    logger.info(f"Prompt: {prompt}")
+    logger.info(f"Checkpoints to evaluate: {len(config.evaluation.checkpoint_names)}")
+    for name in config.evaluation.checkpoint_names:
+        logger.info(f"  - {name}")
+    logger.info(f"Images per checkpoint: {config.generation.num_images}")
+    logger.info(f"Inference steps: {config.generation.num_inference_steps}")
+    logger.info(f"Guidance scale: {config.generation.guidance_scale}")
+    logger.info("=" * 80)
+    
     # Evaluate each checkpoint
-    for checkpoint_name in args.checkpoints:
-        print("\n" + "="*80)
-        print(f"Evaluating checkpoint: {checkpoint_name}")
-        print("="*80)
+    for checkpoint_name in config.evaluation.checkpoint_names:
+        logger.info("=" * 80)
+        logger.info(f"Evaluating checkpoint: {checkpoint_name}")
+        logger.info("=" * 80)
         
-        checkpoint_path = Path(config['training']['checkpoint_dir']) / checkpoint_name
+        checkpoint_path = config.evaluation.checkpoint_dir / checkpoint_name
         
-        # Load pipeline (reuse from generate_xrays.py)
-        pipeline = load_pipeline(str(checkpoint_path), config)
+        # Load pipeline
+        try:
+            pipeline = load_pipeline(
+                checkpoint_path=str(checkpoint_path),
+                pretrained_model=config.model.pretrained_model,
+                enable_attention_slicing=config.hardware.enable_attention_slicing,
+                enable_vae_slicing=config.hardware.enable_vae_slicing,
+                device=config.hardware.device
+            )
+        except FileNotFoundError as e:
+            fail_fast_message("CHECKPOINT LOADING ERROR", str(e))
+        except Exception as e:
+            fail_fast_message("CHECKPOINT LOADING ERROR", f"Failed to load pipeline: {e}")
         
-        all_results[checkpoint_name] = {}
+        # Generate images
+        logger.info(f"Generating {config.generation.num_images} images...")
+        generated_images = generate_images(
+            pipeline=pipeline,
+            prompt=prompt,
+            num_images=config.generation.num_images,
+            num_inference_steps=config.generation.num_inference_steps,
+            guidance_scale=config.generation.guidance_scale,
+            negative_prompt=config.generation.negative_prompt,
+            seed=config.metrics.seed,
+            return_numpy=True  # Return as numpy for evaluation
+        )
+        logger.info(f"✓ Generated {len(generated_images)} images")
         
-        # Evaluate for each label
-        for label in args.labels:
-            print(f"\nProcessing label: {label}")
-            
-            # Create prompt
-            prompt = config['data']['prompt_template'].format(labels=label)
-            print(f"Prompt: {prompt}")
-            
-            # Generate images
-            print(f"Generating {args.num_images} images...")
-            negative_prompt = "blurry, low quality, distorted, artifacts"
-            generated_images = generate_images_as_numpy(
-                pipeline=pipeline,
-                prompt=prompt,
-                num_images=args.num_images,
-                num_inference_steps=args.num_inference_steps,
-                guidance_scale=args.guidance_scale,
-                negative_prompt=negative_prompt,
-                seed=args.seed,
-                device=args.device
-            )
-            
-            # Compute novelty metrics (SSIM)
-            novelty_metrics = compute_novelty_metrics(
-                generated_images,
-                training_images,
-                metric="ssim"
-            )
-            
-            # Compute CLIP scores
-            prompts = [prompt] * len(generated_images)
-            clip_scores = compute_clip_scores(
-                generated_images,
-                prompts,
-                clip_model,
-                clip_processor,
-                args.device
-            )
-            
-            clip_metrics = {
-                'mean_score': float(np.mean(clip_scores)),
-                'median_score': float(np.median(clip_scores)),
-                'max_score': float(np.max(clip_scores)),
-                'min_score': float(np.min(clip_scores)),
-                'std_score': float(np.std(clip_scores)),
-                'clip_scores': clip_scores,
-            }
-            
-            # Visualize most similar pairs
-            visualize_similar_pairs(
-                generated_images,
-                training_images,
-                novelty_metrics['nn_indices'],
-                novelty_metrics['nn_scores'],
-                output_dir,
-                checkpoint_name,
-                label,
-                top_k=10
-            )
-            
-            # Store results
-            all_results[checkpoint_name][label] = {
+        # Compute novelty metrics
+        logger.info("Computing novelty metrics...")
+        novelty_metrics = compute_novelty_metrics(
+            generated_images,
+            training_images,
+            metric=config.metrics.novelty_metric,
+            show_progress=True
+        )
+        logger.info(f"✓ Novelty metrics computed")
+        logger.info(f"  Max SSIM: {novelty_metrics['max_similarity']:.4f}")
+        logger.info(f"  P99 SSIM: {novelty_metrics['p99_similarity']:.4f}")
+        logger.info(f"  Mean SSIM: {novelty_metrics['mean_similarity']:.4f}")
+        
+        # Compute CLIP scores
+        logger.info("Computing CLIP scores...")
+        prompts = [prompt] * len(generated_images)
+        clip_scores = compute_clip_scores(
+            generated_images,
+            prompts,
+            clip_model,
+            clip_processor,
+            config.hardware.device,
+            show_progress=True
+        )
+        clip_metrics = compute_clip_metrics(clip_scores)
+        logger.info(f"✓ CLIP scores computed")
+        logger.info(f"  Mean CLIP: {clip_metrics['mean_score']:.2f}")
+        logger.info(f"  Median CLIP: {clip_metrics['median_score']:.2f}")
+        
+        # Visualize most similar pairs
+        logger.info("Creating visualizations...")
+        viz_path = config.evaluation.output_dir / f"{checkpoint_name}_{config.evaluation.label}_similar_pairs.png"
+        visualize_similar_pairs(
+            generated_images,
+            training_images,
+            novelty_metrics['nn_indices'],
+            novelty_metrics['nn_scores'],
+            viz_path,
+            checkpoint_name,
+            config.evaluation.label,
+            top_k=config.metrics.visualize_top_k
+        )
+        
+        # Store results
+        all_results[checkpoint_name] = {
+            config.evaluation.label: {
                 'novelty': novelty_metrics,
                 'clip': clip_metrics,
             }
-            
-            # Save detailed results
-            save_checkpoint_results(
-                all_results[checkpoint_name][label],
-                output_dir,
-                checkpoint_name,
-                label
-            )
+        }
+        
+        # Save detailed results
+        save_checkpoint_results(
+            all_results[checkpoint_name][config.evaluation.label],
+            config.evaluation.output_dir,
+            checkpoint_name,
+            config.evaluation.label
+        )
         
         # Clean up pipeline to free memory
         del pipeline
-        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
     # Create summary comparison table
-    summary_df = create_summary_table(all_results, output_dir)
+    summary_df = create_summary_table(all_results, config.evaluation.output_dir, config.evaluation.label)
     
-    print(f"\n✓ Evaluation complete! Results saved to {output_dir}")
+    # Create comparison plots
+    if summary_df is not None and len(summary_df) > 0:
+        logger.info("Creating comparison plots...")
+        plot_score_distributions(all_results, config.evaluation.output_dir, config.evaluation.label)
+        plot_checkpoint_comparison(summary_df, config.evaluation.output_dir, config.evaluation.label)
+    
+    logger.info("=" * 80)
+    logger.info("✓ EVALUATION COMPLETE!")
+    logger.info("=" * 80)
+    logger.info(f"Results saved to: {config.evaluation.output_dir}")
+    logger.info(f"\nKey files:")
+    logger.info(f"  - checkpoint_comparison.csv")
+    logger.info(f"  - {config.evaluation.label}_score_distributions.png")
+    logger.info(f"  - {config.evaluation.label}_checkpoint_comparison.png")
+    logger.info("=" * 80)
 
 
 if __name__ == "__main__":

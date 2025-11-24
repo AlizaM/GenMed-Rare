@@ -31,8 +31,10 @@ class ChestXrayDiffusionDataset(Dataset):
         prompt_template: str = "A chest X-ray with {labels}",
         center_crop: bool = True,
         random_flip: bool = False,
+        label_subdir: str = None,
     ):
         self.data_dir = Path(data_dir)
+        self.label_subdir = label_subdir
         self.prompt_template = prompt_template
         
         # Load CSV
@@ -76,7 +78,11 @@ class ChestXrayDiffusionDataset(Dataset):
         
         # Load image
         image_name = row['Image Index']
-        image_path = self.data_dir / image_name
+        # If label_subdir is specified, images are in data_dir/label_subdir/
+        if self.label_subdir:
+            image_path = self.data_dir / self.label_subdir / image_name
+        else:
+            image_path = self.data_dir / image_name
         
         try:
             image = Image.open(image_path).convert('RGB')

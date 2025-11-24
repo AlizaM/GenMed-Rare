@@ -324,6 +324,17 @@ def main():
             global_step = args.resume_step
             starting_epoch = global_step // num_update_steps_per_epoch
     
+    # Initialize trackers for logging (required for TensorBoard)
+    tracker_config = {
+        "experiment_name": experiment_config.get('name', 'fibrosis_prior_lora'),
+        "tags": experiment_config.get('tags', []),
+    }
+    accelerator.init_trackers(
+        project_name=experiment_config.get('name', 'fibrosis_prior_lora'),
+        config=tracker_config,
+        init_kwargs={"tensorboard": {"flush_secs": 30}}
+    )
+    
     # Log training info
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {len(train_dataset)}")
@@ -404,11 +415,26 @@ def main():
                 train_loss = 0.0
                 
                 # Save checkpoint FIRST (before validation that might crash)
+                # Only save LoRA weights (not full model) to save disk space
                 if global_step % training_config.get('save_steps', 250) == 0:
                     if accelerator.is_main_process:
                         checkpoint_dir = output_dir / f"checkpoint-{global_step}"
-                        accelerator.save_state(str(checkpoint_dir))
-                        logger.info(f"✅ Saved checkpoint at step {global_step}")
+                        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        # Save only LoRA adapter weights (~5-50 MB instead of 3+ GB)
+                        unet_unwrapped = accelerator.unwrap_model(unet)
+                        unet_unwrapped.save_pretrained(checkpoint_dir / "lora_weights")
+                        
+                        # Optionally save training state (optimizer, scheduler, step)
+                        # This is much smaller than full model
+                        training_state = {
+                            'global_step': global_step,
+                            'epoch': epoch,
+                            'random_state': torch.get_rng_state(),
+                        }
+                        torch.save(training_state, checkpoint_dir / "training_state.pt")
+                        
+                        logger.info(f"✅ Saved LoRA checkpoint at step {global_step}")
                 
                 # Generate validation images AFTER checkpoint is saved
                 if global_step % training_config.get('validation_steps', 1000) == 0:

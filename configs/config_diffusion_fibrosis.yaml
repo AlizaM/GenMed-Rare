@@ -21,7 +21,7 @@ training:
   # Training parameters
   repeats_per_target: 10  # Each fibrosis image repeated 10 times with different healthy priors
   num_epochs: 20  # Reduced from 20 for faster training
-  batch_size: 6  # Increased from 4 for 8GB VRAM
+  batch_size: 16  # Increased from 4 for 8GB VRAM
   learning_rate: 0.0001
   gradient_accumulation_steps: 1
   
@@ -70,4 +70,4 @@ logging:
   log_level: "INFO"
 
 # Seed for reproducibility
-seed: 42
+seed: 100 
