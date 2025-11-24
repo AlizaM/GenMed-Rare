@@ -203,6 +203,7 @@ def generate_images(
     num_images: int,
     num_inference_steps: int = 50,
     guidance_scale: float = 7.5,
+    lora_scale: float = 1.0,
     negative_prompt: str = "blurry, low quality, distorted, artifacts",
     seed: Optional[int] = None,
     return_numpy: bool = False,
@@ -218,6 +219,7 @@ def generate_images(
         num_images: Number of images to generate
         num_inference_steps: Number of denoising steps
         guidance_scale: Classifier-free guidance scale
+        lora_scale: LoRA adaptation strength (0.0=disabled, 1.0=full, >1.0=amplified)
         negative_prompt: Negative prompt to guide generation away from
         seed: Base random seed (each image gets seed+i for diversity)
         return_numpy: If True, return numpy arrays; if False, return PIL Images
@@ -238,6 +240,7 @@ def generate_images(
             num_images_per_prompt=1,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
+            cross_attention_kwargs={"scale": lora_scale},
             generator=generator,
         ).images[0]
         

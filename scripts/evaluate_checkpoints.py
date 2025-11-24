@@ -369,6 +369,7 @@ def main():
             num_images=config.generation.num_images,
             num_inference_steps=config.generation.num_inference_steps,
             guidance_scale=config.generation.guidance_scale,
+            lora_scale=config.generation.lora_scale,
             negative_prompt=config.generation.negative_prompt,
             seed=config.metrics.seed,
             return_numpy=False  # Get PIL Images first

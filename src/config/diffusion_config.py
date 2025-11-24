@@ -82,6 +82,7 @@ class GenerationConfig:
     num_images: int
     num_inference_steps: int
     guidance_scale: float
+    lora_scale: float = 1.0
     negative_prompt: str = "blurry, low quality, distorted, artifacts"
     
     def __post_init__(self):
@@ -94,6 +95,9 @@ class GenerationConfig:
         
         if self.guidance_scale < 0:
             raise ValueError(f"guidance_scale must be >= 0, got {self.guidance_scale}")
+        
+        if self.lora_scale < 0:
+            raise ValueError(f"lora_scale must be >= 0, got {self.lora_scale}")
 
 
 @dataclass
