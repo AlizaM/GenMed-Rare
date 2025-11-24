@@ -102,12 +102,9 @@ def load_pipeline(
         
         if has_peft_structure:
             print(f"✓ Detected PEFT structure with base_model.model prefix")
-            print(f"Merging LoRA weights into base model (instead of using PEFT wrapper)...")
+            print(f"Loading checkpoint with PEFT wrapper (not merging)...")
             
-            # Instead of wrapping with PEFT and loading, we'll merge LoRA into base weights
-            # This avoids PEFT runtime overhead and dtype issues
-            
-            # Convert checkpoint to target dtype first
+            # Convert checkpoint to target dtype
             print(f"Converting checkpoint from float32 to {dtype}...")
             state_dict_converted = {}
             for k, v in state_dict.items():
@@ -118,60 +115,39 @@ def load_pipeline(
                 else:
                     state_dict_converted[k] = v
             
-            # Merge LoRA weights into base weights
-            print(f"Merging LoRA weights (A @ B) into base layers...")
-            merged_state = {}
-            processed_base_layers = set()  # Track which base layers we've handled
+            # Wrap the UNet with PEFT and load the full state dict
+            # This preserves the exact same runtime behavior as during training
+            from peft import LoraConfig, get_peft_model
             
-            # First pass: Process LoRA-adapted layers (merge LoRA weights)
-            for key in state_dict_converted.keys():
-                if 'base_model.model.' in key and 'base_layer.weight' in key:
-                    # This is a base weight that has LoRA
-                    base_weight = state_dict_converted[key]
-                    
-                    # Find corresponding LoRA weights
-                    prefix = key.replace('base_layer.weight', '')
-                    lora_A_key = f"{prefix}lora_A.default.weight"
-                    lora_B_key = f"{prefix}lora_B.default.weight"
-                    
-                    if lora_A_key in state_dict_converted and lora_B_key in state_dict_converted:
-                        # Merge: W' = W + (B @ A)
-                        lora_A = state_dict_converted[lora_A_key]
-                        lora_B = state_dict_converted[lora_B_key]
-                        merged_weight = base_weight + (lora_B @ lora_A)
-                        
-                        # Store with clean key (remove base_model.model and .base_layer)
-                        clean_key = key.replace('base_model.model.', '').replace('.base_layer', '')
-                        merged_state[clean_key] = merged_weight
-                        processed_base_layers.add(key)
-                    else:
-                        # No LoRA found, just use base weight
-                        clean_key = key.replace('base_model.model.', '').replace('.base_layer', '')
-                        merged_state[clean_key] = base_weight
-                        processed_base_layers.add(key)
+            # Create LoRA config matching training
+            lora_config = LoraConfig(
+                r=64,
+                lora_alpha=64,
+                target_modules=["to_k", "to_q", "to_v", "to_out.0"],
+                lora_dropout=0.0,
+                bias="none",
+            )
             
-            # Second pass: Process all other parameters (biases, non-LoRA weights)
-            for key in state_dict_converted.keys():
-                if 'base_model.model.' in key:
-                    # Skip if already processed, skip LoRA adapter weights
-                    if key in processed_base_layers or 'lora_A' in key or 'lora_B' in key:
-                        continue
-                    
-                    # Clean the key and add to merged state
-                    clean_key = key.replace('base_model.model.', '').replace('.base_layer', '')
-                    merged_state[clean_key] = state_dict_converted[key]
+            # Wrap UNet with PEFT BEFORE loading state dict
+            pipeline.unet = get_peft_model(pipeline.unet, lora_config)
+            print(f"✓ Wrapped UNet with PEFT")
             
-            print(f"Merged {len(merged_state)} parameters from {len(state_dict_converted)} checkpoint keys")
-            
-            # Load merged weights into base UNet
-            missing_keys, unexpected_keys = pipeline.unet.load_state_dict(merged_state, strict=False)
+            # Now load the full state dict (includes both base and LoRA weights)
+            # The state dict keys match the PEFT model structure
+            missing_keys, unexpected_keys = pipeline.unet.load_state_dict(state_dict_converted, strict=False)
             
             if missing_keys:
                 print(f"⚠️  Missing keys: {len(missing_keys)}")
+                if len(missing_keys) <= 10:
+                    for k in missing_keys[:10]:
+                        print(f"    - {k}")
             if unexpected_keys:
                 print(f"⚠️  Unexpected keys: {len(unexpected_keys)}")
+                if len(unexpected_keys) <= 10:
+                    for k in unexpected_keys[:10]:
+                        print(f"    - {k}")
             
-            print(f"✓ Loaded UNet with merged LoRA weights")
+            print(f"✓ Loaded PEFT UNet with LoRA weights ({len(state_dict_converted)} keys)")
         else:
             # Regular state dict without PEFT structure
             missing_keys, unexpected_keys = pipeline.unet.load_state_dict(state_dict, strict=False)
