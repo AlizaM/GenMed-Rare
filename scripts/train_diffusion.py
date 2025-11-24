@@ -540,22 +540,50 @@ def train_loop(
 
 
 def save_checkpoint(unet, checkpoint_dir, step, config, epoch=None, is_best=False):
-    """Save model checkpoint with better organization."""
+    """
+    Save model checkpoint with better organization.
+    
+    For LoRA models, saves only the adapter weights (adapter_config.json + adapter_model.safetensors).
+    For full models, saves complete model weights.
+    
+    Args:
+        unet: UNet model (may be wrapped by Accelerate)
+        checkpoint_dir: Directory to save checkpoints
+        step: Current training step
+        config: Training configuration
+        epoch: Current epoch (optional)
+        is_best: Whether this is the best model so far
+    """
     
     # Create step-based checkpoint (for resuming mid-epoch)
     step_path = checkpoint_dir / f"checkpoint-step-{step}"
     step_path.mkdir(exist_ok=True)
     
+    # Unwrap from Accelerate if needed
+    unwrapped_unet = unet
+    if hasattr(unet, 'module'):
+        unwrapped_unet = unet.module
+    
     if config['model']['use_lora']:
-        unet.save_pretrained(step_path)
+        # Save only LoRA adapter weights (saves space, easier to share)
+        # This creates adapter_config.json and adapter_model.safetensors
+        unwrapped_unet.save_pretrained(step_path)
+        print(f"✓ LoRA adapter saved to {step_path}")
     else:
-        unet.save_pretrained(step_path)
+        # Save full model
+        unwrapped_unet.save_pretrained(step_path)
+        print(f"✓ Full model saved to {step_path}")
     
     print(f"Step checkpoint saved to {step_path}")
     
     # If epoch is provided, also save epoch-based checkpoint
     if epoch is not None:
         epoch_path = checkpoint_dir / f"checkpoint-epoch-{epoch}"
+        
+        # Unwrap from Accelerate if needed
+        unwrapped_unet = unet
+        if hasattr(unet, 'module'):
+            unwrapped_unet = unet.module
         
         # Check if epoch checkpoint already exists (to avoid overwriting when resuming)
         if epoch_path.exists():
@@ -564,9 +592,13 @@ def save_checkpoint(unet, checkpoint_dir, step, config, epoch=None, is_best=Fals
             epoch_path.mkdir(exist_ok=True)
             
             if config['model']['use_lora']:
-                unet.save_pretrained(epoch_path)
+                # Save only LoRA adapter
+                unwrapped_unet.save_pretrained(epoch_path)
+                print(f"✓ LoRA adapter saved to {epoch_path}")
             else:
-                unet.save_pretrained(epoch_path)
+                # Save full model
+                unwrapped_unet.save_pretrained(epoch_path)
+                print(f"✓ Full model saved to {epoch_path}")
                 
             print(f"Epoch checkpoint saved to {epoch_path}")
             
@@ -578,10 +610,19 @@ def save_checkpoint(unet, checkpoint_dir, step, config, epoch=None, is_best=Fals
         best_path = checkpoint_dir / "best_model"
         best_path.mkdir(exist_ok=True)
         
+        # Unwrap from Accelerate if needed
+        unwrapped_unet = unet
+        if hasattr(unet, 'module'):
+            unwrapped_unet = unet.module
+        
         if config['model']['use_lora']:
-            unet.save_pretrained(best_path)
+            # Save only LoRA adapter
+            unwrapped_unet.save_pretrained(best_path)
+            print(f"✓ LoRA adapter saved to {best_path}")
         else:
-            unet.save_pretrained(best_path)
+            # Save full model
+            unwrapped_unet.save_pretrained(best_path)
+            print(f"✓ Full model saved to {best_path}")
             
         print(f"Best model saved to {best_path}")
 

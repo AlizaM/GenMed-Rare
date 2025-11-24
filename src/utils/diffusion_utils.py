@@ -13,8 +13,9 @@ import numpy as np
 from PIL import Image
 
 import torch
-from diffusers import StableDiffusionPipeline
-from peft import PeftModel
+from diffusers import StableDiffusionPipeline, UNet2DConditionModel
+from peft import PeftModel, LoraConfig, get_peft_model
+from safetensors.torch import load_file
 
 from .image_utils import pil_to_numpy
 
@@ -29,6 +30,10 @@ def load_pipeline(
     """
     Load Stable Diffusion pipeline with LoRA weights.
     
+    Handles two checkpoint formats:
+    1. LoRA adapter files: adapter_config.json + adapter_model.safetensors
+    2. Accelerate checkpoints: model.safetensors + optimizer.bin (training format)
+    
     Args:
         checkpoint_path: Path to LoRA checkpoint directory
         pretrained_model: HuggingFace model ID or path to base model
@@ -41,6 +46,7 @@ def load_pipeline(
     
     Raises:
         FileNotFoundError: If checkpoint path doesn't exist
+        ValueError: If checkpoint format is not recognized
     """
     checkpoint_path = Path(checkpoint_path)
     
@@ -52,25 +58,145 @@ def load_pipeline(
     
     print(f"Loading base model: {pretrained_model}")
     
-    # Load base pipeline
-    pipeline = StableDiffusionPipeline.from_pretrained(
-        pretrained_model,
-        torch_dtype=torch.float16,
-        safety_checker=None,
-    )
-    
-    # Load LoRA weights
-    print(f"Loading LoRA weights from: {checkpoint_path}")
-    pipeline.unet = PeftModel.from_pretrained(
-        pipeline.unet,
-        checkpoint_path,
-        is_trainable=False
-    )
-    
-    # Move to GPU
+    # Determine device first
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     
+    # Set dtype based on device
+    dtype = torch.float16 if device == "cuda" else torch.float32
+    
+    # Load base pipeline
+    pipeline = StableDiffusionPipeline.from_pretrained(
+        pretrained_model,
+        torch_dtype=dtype,
+        safety_checker=None,
+    )
+    
+    # Detect checkpoint format
+    has_adapter_config = (checkpoint_path / "adapter_config.json").exists()
+    has_model_safetensors = (checkpoint_path / "model.safetensors").exists()
+    
+    if has_adapter_config:
+        # Format 1: LoRA adapter files (evaluation-friendly format)
+        print(f"Loading LoRA adapter from: {checkpoint_path}")
+        pipeline.unet = PeftModel.from_pretrained(
+            pipeline.unet,
+            checkpoint_path,
+            is_trainable=False
+        )
+    elif has_model_safetensors:
+        # Format 2: Accelerate checkpoint (old training format - PEFT model with LoRA)
+        # The model.safetensors contains UNet state dict with PEFT structure:
+        # - base_model.model.X.base_layer.weight (base weights)
+        # - base_model.model.X.lora_A/B.default.weight (LoRA weights)
+        print(f"⚠️  Detected old Accelerate checkpoint format at: {checkpoint_path}")
+        print(f"Loading PEFT UNet state from model.safetensors...")
+        print(f"Note: Future checkpoints will use LoRA adapter format (adapter_*.safetensors)")
+        
+        # Load the state dict from safetensors
+        state_dict = load_file(str(checkpoint_path / "model.safetensors"))
+        
+        # Check structure
+        sample_keys = list(state_dict.keys())[:5]
+        has_peft_structure = any('base_model.model.' in key for key in sample_keys)
+        
+        if has_peft_structure:
+            print(f"✓ Detected PEFT structure with base_model.model prefix")
+            print(f"Merging LoRA weights into base model (instead of using PEFT wrapper)...")
+            
+            # Instead of wrapping with PEFT and loading, we'll merge LoRA into base weights
+            # This avoids PEFT runtime overhead and dtype issues
+            
+            # Convert checkpoint to target dtype first
+            print(f"Converting checkpoint from float32 to {dtype}...")
+            state_dict_converted = {}
+            for k, v in state_dict.items():
+                if v.dtype == torch.float32 and dtype == torch.float16:
+                    state_dict_converted[k] = v.half()
+                elif v.dtype == torch.float16 and dtype == torch.float32:
+                    state_dict_converted[k] = v.float()
+                else:
+                    state_dict_converted[k] = v
+            
+            # Merge LoRA weights into base weights
+            print(f"Merging LoRA weights (A @ B) into base layers...")
+            merged_state = {}
+            processed_base_layers = set()  # Track which base layers we've handled
+            
+            # First pass: Process LoRA-adapted layers (merge LoRA weights)
+            for key in state_dict_converted.keys():
+                if 'base_model.model.' in key and 'base_layer.weight' in key:
+                    # This is a base weight that has LoRA
+                    base_weight = state_dict_converted[key]
+                    
+                    # Find corresponding LoRA weights
+                    prefix = key.replace('base_layer.weight', '')
+                    lora_A_key = f"{prefix}lora_A.default.weight"
+                    lora_B_key = f"{prefix}lora_B.default.weight"
+                    
+                    if lora_A_key in state_dict_converted and lora_B_key in state_dict_converted:
+                        # Merge: W' = W + (B @ A)
+                        lora_A = state_dict_converted[lora_A_key]
+                        lora_B = state_dict_converted[lora_B_key]
+                        merged_weight = base_weight + (lora_B @ lora_A)
+                        
+                        # Store with clean key (remove base_model.model and .base_layer)
+                        clean_key = key.replace('base_model.model.', '').replace('.base_layer', '')
+                        merged_state[clean_key] = merged_weight
+                        processed_base_layers.add(key)
+                    else:
+                        # No LoRA found, just use base weight
+                        clean_key = key.replace('base_model.model.', '').replace('.base_layer', '')
+                        merged_state[clean_key] = base_weight
+                        processed_base_layers.add(key)
+            
+            # Second pass: Process all other parameters (biases, non-LoRA weights)
+            for key in state_dict_converted.keys():
+                if 'base_model.model.' in key:
+                    # Skip if already processed, skip LoRA adapter weights
+                    if key in processed_base_layers or 'lora_A' in key or 'lora_B' in key:
+                        continue
+                    
+                    # Clean the key and add to merged state
+                    clean_key = key.replace('base_model.model.', '').replace('.base_layer', '')
+                    merged_state[clean_key] = state_dict_converted[key]
+            
+            print(f"Merged {len(merged_state)} parameters from {len(state_dict_converted)} checkpoint keys")
+            
+            # Load merged weights into base UNet
+            missing_keys, unexpected_keys = pipeline.unet.load_state_dict(merged_state, strict=False)
+            
+            if missing_keys:
+                print(f"⚠️  Missing keys: {len(missing_keys)}")
+            if unexpected_keys:
+                print(f"⚠️  Unexpected keys: {len(unexpected_keys)}")
+            
+            print(f"✓ Loaded UNet with merged LoRA weights")
+        else:
+            # Regular state dict without PEFT structure
+            missing_keys, unexpected_keys = pipeline.unet.load_state_dict(state_dict, strict=False)
+            
+            if missing_keys:
+                print(f"⚠️  Missing keys: {len(missing_keys)} keys")
+            if unexpected_keys:
+                print(f"⚠️  Unexpected keys: {len(unexpected_keys)} keys")
+            
+            print(f"✓ Loaded UNet state dict ({len(state_dict)} keys)")
+    else:
+        # Check what files exist for better error message
+        files = list(checkpoint_path.iterdir())
+        file_list = "\n".join([f"  - {f.name}" for f in files])
+        
+        raise ValueError(
+            f"Unrecognized checkpoint format at: {checkpoint_path}\n"
+            f"Expected either:\n"
+            f"  - LoRA adapter: adapter_config.json + adapter_model.safetensors\n"
+            f"  - Accelerate checkpoint: model.safetensors + optimizer.bin\n\n"
+            f"Found files:\n{file_list}\n\n"
+            f"Please ensure checkpoints are saved in one of these formats."
+        )
+    
+    # Move to device AFTER loading checkpoint
     pipeline = pipeline.to(device)
     
     # Enable memory optimizations

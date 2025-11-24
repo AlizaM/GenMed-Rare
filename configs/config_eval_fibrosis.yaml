@@ -15,8 +15,8 @@ evaluation:
   # List of specific checkpoints to evaluate
   # Format: checkpoint-step-{step_number}
   checkpoint_names:
-    - "checkpoint-6750"
-    - "checkpoint-6250"
+    - "checkpoint-6500"
+    - "checkpoint-6000"
     - "checkpoint-5000"
   
   # Output directory for evaluation results
