@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 from src.config import load_diffusion_eval_config, DiffusionEvaluationConfig
 from src.data.diffusion_dataset import ChestXrayDiffusionDataset
 from src.utils.diffusion_utils import load_pipeline, generate_images
-from src.utils.image_utils import tensor_to_numpy
+from src.utils.image_utils import tensor_to_numpy, pil_to_numpy
 from src.eval.metrics import (
     compute_novelty_metrics,
     load_clip_model,
@@ -52,6 +52,9 @@ from src.utils.visualization import (
     plot_score_distributions,
     plot_checkpoint_comparison
 )
+
+# Import shared image saving utilities
+from scripts.generate_xrays import save_images_with_seeds
 
 
 def fail_fast_message(error_type: str, message: str):
@@ -360,7 +363,7 @@ def main():
         
         # Generate images
         logger.info(f"Generating {config.generation.num_images} images...")
-        generated_images = generate_images(
+        generated_images_pil = generate_images(
             pipeline=pipeline,
             prompt=prompt,
             num_images=config.generation.num_images,
@@ -368,9 +371,17 @@ def main():
             guidance_scale=config.generation.guidance_scale,
             negative_prompt=config.generation.negative_prompt,
             seed=config.metrics.seed,
-            return_numpy=True  # Return as numpy for evaluation
+            return_numpy=False  # Get PIL Images first
         )
-        logger.info(f"✓ Generated {len(generated_images)} images")
+        logger.info(f"✓ Generated {len(generated_images_pil)} images")
+        
+        # Save generated images using shared utility
+        images_dir = config.evaluation.output_dir / f"{checkpoint_name}_{config.evaluation.label}_images"
+        save_images_with_seeds(generated_images_pil, images_dir, config.metrics.seed)
+        logger.info(f"✓ Saved images to {images_dir}")
+        
+        # Convert to numpy for metrics
+        generated_images = [pil_to_numpy(img) for img in generated_images_pil]
         
         # Compute novelty metrics
         logger.info("Computing novelty metrics...")

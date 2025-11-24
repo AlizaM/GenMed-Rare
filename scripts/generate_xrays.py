@@ -16,16 +16,21 @@ Usage:
 """
 
 import argparse
+import sys
 import yaml
 from pathlib import Path
 from typing import List, Optional
 import pandas as pd
 
 import torch
-from diffusers import StableDiffusionPipeline, DDPMScheduler
-from peft import PeftModel
 from tqdm import tqdm
 from PIL import Image
+
+# Add project root to path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+from src.utils.diffusion_utils import load_pipeline, generate_images
 
 
 def parse_args():
@@ -128,48 +133,30 @@ def extract_unique_labels(csv_file: str, prompt_template: str) -> List[str]:
 
 
 def setup_pipeline(checkpoint_path: str, config: dict):
-    """Load Stable Diffusion pipeline with LoRA weights."""
+    """
+    Load Stable Diffusion pipeline with LoRA weights.
+    
+    Uses load_pipeline() from diffusion_utils which handles both:
+    - New adapter format (adapter_config.json + adapter_model.safetensors)
+    - Old Accelerate format (model.safetensors with PEFT structure)
+    """
     pretrained_model = config['model']['pretrained_model']
-    
-    print(f"Loading base model: {pretrained_model}")
-    
-    # Load base pipeline
-    pipeline = StableDiffusionPipeline.from_pretrained(
-        pretrained_model,
-        torch_dtype=torch.float16,
-        safety_checker=None,
-    )
-    
-    # Load LoRA weights
-    checkpoint_path = Path(checkpoint_path)
-    if checkpoint_path.exists():
-        print(f"Loading LoRA weights from: {checkpoint_path}")
-        pipeline.unet = PeftModel.from_pretrained(
-            pipeline.unet,
-            checkpoint_path,
-            is_trainable=False
-        )
-    else:
-        print(f"Warning: Checkpoint not found at {checkpoint_path}")
-        print("Using base model without LoRA fine-tuning")
-    
-    # Move to GPU
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    pipeline = pipeline.to(device)
     
-    # Enable memory optimizations
-    if config['hardware']['enable_attention_slicing']:
-        pipeline.enable_attention_slicing()
+    print(f"Loading pipeline from checkpoint: {checkpoint_path}")
     
-    if config['hardware']['enable_vae_slicing']:
-        pipeline.enable_vae_slicing()
-    
-    print(f"Pipeline loaded on {device}")
+    pipeline = load_pipeline(
+        checkpoint_path=checkpoint_path,
+        pretrained_model=pretrained_model,
+        enable_attention_slicing=True,  # Always enable for memory efficiency
+        enable_vae_slicing=True,  # Always enable for memory efficiency
+        device=device
+    )
     
     return pipeline
 
 
-def generate_images(
+def generate_images_for_prompt(
     pipeline,
     prompt: str,
     num_images: int,
@@ -178,36 +165,75 @@ def generate_images(
     negative_prompt: str,
     seed: Optional[int] = None,
 ):
-    """Generate images from a single prompt."""
-    generator = None
-    if seed is not None:
-        generator = torch.Generator(device=pipeline.device).manual_seed(seed)
+    """
+    Generate images from a single prompt.
     
+    Wrapper around diffusion_utils.generate_images() for backward compatibility.
+    """
     print(f"\nGenerating {num_images} images...")
     print(f"Prompt: {prompt}")
     
-    images = pipeline(
+    images = generate_images(
+        pipeline=pipeline,
         prompt=prompt,
-        negative_prompt=negative_prompt,
-        num_images_per_prompt=num_images,
+        num_images=num_images,
         num_inference_steps=num_inference_steps,
         guidance_scale=guidance_scale,
-        generator=generator,
-    ).images
+        negative_prompt=negative_prompt,
+        seed=seed,
+        return_numpy=False  # Return PIL Images
+    )
     
     return images
 
 
 def save_images(images: List[Image.Image], output_dir: Path, prompt: str, start_idx: int = 0):
-    """Save generated images to disk."""
+    """
+    Save generated images to disk.
+    
+    Args:
+        images: List of PIL Images to save
+        output_dir: Directory to save images
+        prompt: Text prompt used for generation (used in filename)
+        start_idx: Starting index for numbering files
+        
+    Returns:
+        List of saved file paths
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Create safe filename from prompt
-    safe_prompt = prompt.replace("A chest X-ray with ", "").replace(" ", "_").replace("/", "-")
+    safe_prompt = prompt.replace("A chest X-ray with ", "").replace("a chest x-ray with ", "")
+    safe_prompt = safe_prompt.replace(" ", "_").replace("/", "-")
     
     saved_paths = []
     for i, img in enumerate(images):
         filename = f"{safe_prompt}_{start_idx + i:04d}.png"
+        filepath = output_dir / filename
+        img.save(filepath)
+        saved_paths.append(filepath)
+    
+    return saved_paths
+
+
+def save_images_with_seeds(images: List[Image.Image], output_dir: Path, base_seed: int):
+    """
+    Save generated images with seed numbers in filenames.
+    
+    Args:
+        images: List of PIL Images to save
+        output_dir: Directory to save images
+        base_seed: Base seed used for generation (each image is base_seed + i)
+        
+    Returns:
+        List of saved file paths
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    saved_paths = []
+    for i, img in enumerate(images):
+        seed = base_seed + i
+        filename = f"image_{i:02d}_seed_{seed}.png"
         filepath = output_dir / filename
         img.save(filepath)
         saved_paths.append(filepath)
@@ -229,7 +255,8 @@ def main():
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
-        output_dir = Path(config['generation']['output_dir'])
+        # Fallback: use config or default
+        output_dir = Path(config.get('generation', {}).get('output_dir', 'outputs/generated_images'))
     
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Output directory: {output_dir}")
@@ -238,20 +265,20 @@ def main():
     pipeline = setup_pipeline(args.checkpoint, config)
     
     # Get negative prompt
-    negative_prompt = config['generation']['negative_prompt']
+    negative_prompt = config.get('generation', {}).get('negative_prompt', 
+                                                       'blurry, low quality, distorted, artifacts')
     
     # Determine prompts to generate
     if args.generate_all_labels:
         print("\nExtracting unique labels from dataset...")
-        prompts = extract_unique_labels(
-            args.csv_file,
-            config['data']['prompt_template']
-        )
+        prompt_template = config.get('data', {}).get('prompt_template', 'A chest X-ray with {labels}')
+        prompts = extract_unique_labels(args.csv_file, prompt_template)
         print(f"Found {len(prompts)} unique label combinations")
     elif args.prompt:
         prompts = [args.prompt]
     else:
-        prompts = [config['training']['validation_prompt']]
+        # Fallback: use validation prompt from training config
+        prompts = [config.get('training', {}).get('validation_prompt', 'a chest x-ray')]
     
     # Generate images for each prompt
     print("\n" + "="*60)
@@ -268,7 +295,7 @@ def main():
     
     for prompt_idx, prompt in enumerate(tqdm(prompts, desc="Generating")):
         # Generate images
-        images = generate_images(
+        images = generate_images_for_prompt(
             pipeline=pipeline,
             prompt=prompt,
             num_images=args.num_images,
