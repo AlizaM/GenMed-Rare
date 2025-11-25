@@ -2,72 +2,68 @@ model:
   pretrained_model: "danyalmalik/stable-diffusion-chest-xray"
   vae:
     path: "stabilityai/sd-vae-ft-mse"
-  
-training:
-  # Prior-based training for Fibrosis
-  mode: "prior_based"
-  target_pathology: "fibrosis"
-  
-  # Data paths
-  target_images_dir: "data/pure_class_folders/fibrosis"
-  target_images_csv: "data/pure_class_folders/fibrosis_images.csv"
-  prior_images_dir: "data/pure_class_folders/healthy"
-  prior_images_csv: "data/pure_class_folders/healthy_images.csv"
-  
-  # Conditioning prompts
-  target_prompt: "a chest x-ray with fibrosis"
-  prior_prompt: "a chest x-ray"
-  
-  # Training parameters
-  repeats_per_target: 5 # Each fibrosis image repeated 5 times with different healthy priors
-  num_epochs: 20  # Reduced from 20 for faster training
-  batch_size: 16  # Increased from 4 for 8GB VRAM
-  learning_rate: 1e-5
-  gradient_accumulation_steps: 1
-  
-  # LoRA settings
+  use_lora: true
   lora:
     rank: 64
     alpha: 32
+    target_modules:
+      - "to_k"
+      - "to_q"
+      - "to_v"
+      - "to_out.0"
     dropout: 0.1
-    target_modules: ["to_k", "to_q", "to_v", "to_out.0"]
-    
-  # Image settings
-  resolution: 512
-  center_crop: true
-  random_flip: false  # Medical images should not be flipped
-  
-  # Validation and checkpointing
-  save_steps: 250          # Save checkpoint every 250 steps (more frequent)
-  validation_steps: 1000   # Generate validation images every 1000 steps (after checkpoints)
-  num_validation_images: 4
-  validation_prompt: "a chest x-ray with fibrosis"
-  
-  # Mixed precision and optimization
+    bias: "none"
+training:
+  use_tensorboard: true
+  checkpoint_dir: "outputs/diffusion_fibrosis_prior/checkpoints"
+  log_dir: "outputs/diffusion_fibrosis_prior/logs"
   mixed_precision: "fp16"
   enable_xformers_memory_efficient_attention: true
   gradient_checkpointing: true
-  dataloader_num_workers: 2  # Reduce from default 4 to save memory
-  pin_memory: false  # Disable to save VRAM
-  
-  # Noise scheduler
+  dataloader_num_workers: 2
+  pin_memory: false
   noise_scheduler: "ddpm"
   beta_start: 0.00085
   beta_end: 0.012
   beta_schedule: "scaled_linear"
   num_train_timesteps: 1000
-  
+  mode: "prior_based"
+  target_pathology: "fibrosis"
+  target_images_dir: "data/pure_class_folders/fibrosis"
+  target_images_csv: "data/pure_class_folders/fibrosis_images.csv"
+  prior_images_dir: "data/pure_class_folders/healthy"
+  prior_images_csv: "data/pure_class_folders/healthy_images.csv"
+  target_prompt: "a chest x-ray with fibrosis"
+  prior_prompt: "a chest x-ray"
+  repeats_per_target: 5
+  num_train_epochs: 20
+  train_batch_size: 16
+  learning_rate: 0.00001
+  gradient_accumulation_steps: 1
+  resolution: 512
+  center_crop: true
+  random_flip: false
+  save_steps: 250
+  validation_steps: 1000
+  num_validation_images: 4
+  validation_prompt: "a chest x-ray with fibrosis"
 paths:
   output_dir: "outputs/diffusion_fibrosis_prior"
   logging_dir: "outputs/diffusion_fibrosis_prior/logs"
-  
+generation:
+  num_inference_steps: 50
+  guidance_scale: 7.5
+hardware:
+  enable_attention_slicing: true
+  enable_vae_slicing: true
 experiment:
   name: "fibrosis_prior_lora"
-  tags: ["fibrosis", "prior_based", "medical", "lora"]
-  
+  tags:
+    - "fibrosis"
+    - "prior_based"
+    - "medical"
+    - "lora"
+  seed: 100
 logging:
   report_to: "tensorboard"
   log_level: "INFO"
-
-# Seed for reproducibility
-seed: 100 
