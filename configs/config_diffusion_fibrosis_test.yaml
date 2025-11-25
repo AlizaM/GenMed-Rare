@@ -2,70 +2,66 @@ model:
   pretrained_model: "danyalmalik/stable-diffusion-chest-xray"
   vae:
     path: "stabilityai/sd-vae-ft-mse"
-  
+  use_lora: true
+  lora_rank: 64
+  lora_alpha: 32
+  lora_target_modules: ["to_k", "to_q", "to_v", "to_out.0"]
+  lora_dropout: 0.1
+  lora_bias: "none"
+
 training:
-  # Prior-based training for Fibrosis - TEST CONFIGURATION
   mode: "prior_based"
   target_pathology: "fibrosis"
-  
-  # Data paths
   target_images_dir: "data/pure_class_folders/fibrosis"
   target_images_csv: "data/pure_class_folders/fibrosis_images.csv"
   prior_images_dir: "data/pure_class_folders/healthy"
   prior_images_csv: "data/pure_class_folders/healthy_images.csv"
-  
-  # Conditioning prompts
   target_prompt: "a chest x-ray with fibrosis"
   prior_prompt: "a chest x-ray"
-  
-  # TEST PARAMETERS - Very short training
-  repeats_per_target: 1   # Just 1 repeat for testing (551 samples)
-  num_epochs: 1           # Just 1 epoch
-  batch_size: 4
-  learning_rate: 0.0001
+  repeats_per_target: 5
+  num_train_epochs: 1
+  train_batch_size: 4
+  learning_rate: 0.00001
   gradient_accumulation_steps: 1
-  
-  # LoRA settings
-  lora:
-    rank: 64
-    alpha: 64
-    dropout: 0.1
-    target_modules: ["to_k", "to_q", "to_v", "to_out.0"]
-    
-  # Image settings
+  max_train_steps: 4
+  use_tensorboard: true
   resolution: 512
   center_crop: true
   random_flip: false
-  
-  # TEST VALIDATION/CHECKPOINTING - Very frequent for testing
-  save_steps: 10          # Save checkpoint every 10 steps
-  validation_steps: 20    # Generate validation every 20 steps
-  num_validation_images: 2  # Only 2 images for speed
+  checkpoint_dir: "outputs/diffusion_fibrosis_test/checkpoints"
+  log_dir: "outputs/diffusion_fibrosis_test/logs"
+  save_steps: 2
+  validation_steps: 4
+  num_validation_images: 2
   validation_prompt: "a chest x-ray with fibrosis"
-  
-  # Mixed precision and optimization
   mixed_precision: "fp16"
   enable_xformers_memory_efficient_attention: true
   gradient_checkpointing: true
-  
-  # Noise scheduler
+  dataloader_num_workers: 2
+  pin_memory: false
   noise_scheduler: "ddpm"
   beta_start: 0.00085
   beta_end: 0.012
   beta_schedule: "scaled_linear"
   num_train_timesteps: 1000
-  
+
+generation:
+  num_inference_steps: 20
+  guidance_scale: 7.5
+
+hardware:
+  enable_attention_slicing: true
+  enable_vae_slicing: true
+
 paths:
-  output_dir: "outputs/diffusion_test"
-  logging_dir: "outputs/diffusion_test/logs"
-  
+  output_dir: "outputs/diffusion_fibrosis_test"
+  logging_dir: "outputs/diffusion_fibrosis_test/logs"
+
 experiment:
   name: "fibrosis_test"
-  tags: ["test", "fibrosis", "prior_based"]
-  
+  tags: ["fibrosis", "test", "medical", "lora"]
+  seed: 100
+
 logging:
   report_to: "tensorboard"
   log_level: "INFO"
-
-# Seed for reproducibility
-seed: 42

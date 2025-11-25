@@ -513,6 +513,9 @@ def train_loop(
             if len(epoch_losses) >= 5:
                 recent_trend = sum(epoch_losses[-5:]) / 5
                 writer.add_scalar('train/loss_trend_5epoch', recent_trend, epoch)
+            
+            # Flush to ensure data is written to disk
+            writer.flush()
         
         # Save epoch checkpoint and check if it's the best
         is_best = avg_epoch_loss < best_loss
@@ -681,13 +684,19 @@ def validate(unet, vae, text_encoder, tokenizer, noise_scheduler, config, step, 
     )
     pipeline = pipeline.to(unet.device)
     
-    # Generate images
-    images = pipeline(
-        validation_prompt,
-        num_images_per_prompt=num_images,
-        num_inference_steps=config['generation']['num_inference_steps'],
-        guidance_scale=config['generation']['guidance_scale'],
-    ).images
+    # Generate images with different seeds for diversity
+    images = []
+    for i in range(num_images):
+        # Use different seed for each image to ensure diversity
+        generator = torch.Generator(device=unet.device).manual_seed(step + i)
+        img = pipeline(
+            validation_prompt,
+            num_images_per_prompt=1,
+            num_inference_steps=config['generation']['num_inference_steps'],
+            guidance_scale=config['generation']['guidance_scale'],
+            generator=generator,
+        ).images[0]
+        images.append(img)
     
     # Save images and log to tensorboard
     for i, img in enumerate(images):
@@ -882,7 +891,23 @@ def main():
     )
     
     if writer:
+        writer.flush()  # Final flush before closing
         writer.close()
+    
+    # Save final loss plot
+    if accelerator.is_main_process and len(epoch_losses) > 0:
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(len(epoch_losses)), epoch_losses, marker='o', linewidth=2)
+        plt.xlabel('Epoch', fontsize=12)
+        plt.ylabel('Loss', fontsize=12)
+        plt.title('Training Loss Over Time', fontsize=14)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plot_path = checkpoint_dir.parent / 'training_loss.png'
+        plt.savefig(plot_path, dpi=150)
+        plt.close()
+        print(f"\n✓ Loss plot saved to: {plot_path}")
     
     print("\n" + "="*60)
     print("✓ Training Complete!")

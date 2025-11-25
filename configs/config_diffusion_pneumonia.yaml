@@ -1,0 +1,81 @@
+model:
+  pretrained_model: "danyalmalik/stable-diffusion-chest-xray"
+  vae:
+    path: "stabilityai/sd-vae-ft-mse"
+  use_lora: true  # Use LoRA for efficient fine-tuning
+  lora_rank: 64
+  lora_alpha: 32
+  lora_target_modules: ["to_k", "to_q", "to_v", "to_out.0"]
+  lora_dropout: 0.1
+  lora_bias: "none"
+  
+training:
+  # Prior-based training for Pneumonia
+  mode: "prior_based"
+  target_pathology: "pneumonia"
+  
+  # Data paths
+  target_images_dir: "data/pure_class_folders/pneumonia"
+  target_images_csv: "data/pure_class_folders/pneumonia_images.csv"
+  prior_images_dir: "data/pure_class_folders/healthy"
+  prior_images_csv: "data/pure_class_folders/healthy_images.csv"
+  
+  # Conditioning prompts
+  target_prompt: "a chest x-ray with pneumonia"
+  prior_prompt: "a chest x-ray"
+  
+  # Training parameters
+  repeats_per_target: 12  # Each pneumonia image repeated 12 times with different healthy priors
+  num_train_epochs: 20
+  train_batch_size: 16
+  learning_rate: 0.00001  # 1e-5 in decimal
+  gradient_accumulation_steps: 1
+  use_tensorboard: true  # Enable TensorBoard logging for loss visualization
+  
+  # Image settings
+  resolution: 512
+  center_crop: true
+  random_flip: false  # Medical images should not be flipped
+  
+  # Validation and checkpointing
+  checkpoint_dir: "outputs/diffusion_pneumonia_prior/checkpoints"
+  log_dir: "outputs/diffusion_pneumonia_prior/logs"
+  save_steps: 250          # Save checkpoint every 250 steps (more frequent)
+  validation_steps: 1000   # Generate validation images every 1000 steps (after checkpoints)
+  num_validation_images: 4
+  validation_prompt: "a chest x-ray with pneumonia"
+  
+  # Mixed precision and optimization
+  mixed_precision: "fp16"
+  enable_xformers_memory_efficient_attention: true
+  gradient_checkpointing: true
+  dataloader_num_workers: 2  # Reduce from default 4 to save memory
+  pin_memory: false  # Disable to save VRAM
+  
+  # Noise scheduler
+  noise_scheduler: "ddpm"
+  beta_start: 0.00085
+  beta_end: 0.012
+  beta_schedule: "scaled_linear"
+  num_train_timesteps: 1000
+
+generation:
+  num_inference_steps: 50
+  guidance_scale: 7.5
+
+hardware:
+  enable_attention_slicing: true
+  enable_vae_slicing: true
+  
+paths:
+  output_dir: "outputs/diffusion_pneumonia_prior"
+  logging_dir: "outputs/diffusion_pneumonia_prior/logs"
+  
+experiment:
+  name: "pneumonia_prior_lora"
+  tags: ["pneumonia", "prior_based", "medical", "lora"]
+  seed: 100  # Seed for reproducibility
+  
+logging:
+  report_to: "tensorboard"
+  log_level: "INFO" 

@@ -34,6 +34,7 @@ from transformers import CLIPTextModel, CLIPTokenizer, CLIPImageProcessor
 import yaml
 
 from src.data.prior_dataset import PriorBasedDiffusionDataset, collate_fn
+from src.config.diffusion_config import load_diffusion_training_config
 
 
 logger = get_logger(__name__)
@@ -137,25 +138,29 @@ You should use "a chest x-ray with fibrosis" to trigger the image generation.
 
 def main():
     args = parse_args()
-    config = load_config(args.config)
     
-    # Extract config sections
-    model_config = config.get('model', {})
-    training_config = config.get('training', {})
-    paths_config = config.get('paths', {})
-    experiment_config = config.get('experiment', {})
-    logging_config = config.get('logging', {})
+    # Load configuration using config manager (validates and creates dataclasses)
+    config_obj = load_diffusion_training_config(args.config)
+    
+    # Extract config sections (now as dataclass attributes)
+    model_config = config_obj.model
+    training_config = config_obj.training
+    paths_config = config_obj.paths
+    experiment_config = config_obj.experiment
+    logging_config = config_obj.logging
+    hardware_config = config_obj.hardware
+    generation_config = config_obj.generation
     
     # Setup accelerator with project configuration
     accelerator_project_config = ProjectConfiguration(
-        project_dir=paths_config.get('output_dir', 'outputs/diffusion_prior'),
-        logging_dir=paths_config.get('logging_dir', 'outputs/diffusion_prior/logs')
+        project_dir=str(paths_config.output_dir),
+        logging_dir=str(paths_config.logging_dir)
     )
     
     accelerator = Accelerator(
-        gradient_accumulation_steps=training_config.get('gradient_accumulation_steps', 1),
-        mixed_precision=training_config.get('mixed_precision', 'fp16'),
-        log_with=logging_config.get('report_to', 'tensorboard'),
+        gradient_accumulation_steps=training_config.gradient_accumulation_steps,
+        mixed_precision=training_config.mixed_precision,
+        log_with=logging_config.report_to,
         project_config=accelerator_project_config,
     )
     
@@ -163,64 +168,61 @@ def main():
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
-        level=getattr(logging, logging_config.get('log_level', 'INFO').upper()),
+        level=getattr(logging, logging_config.log_level.upper()),
     )
     logger.info(accelerator.state, main_process_only=False)
     
     # Set random seed
-    if config.get('seed') is not None:
-        set_seed(config['seed'])
+    if experiment_config.seed is not None:
+        set_seed(experiment_config.seed)
     
     # Create output directories
-    output_dir = Path(paths_config.get('output_dir', 'outputs/diffusion_prior'))
+    output_dir = paths_config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Load model components
-    logger.info(f"Loading models from {model_config['pretrained_model']}...")
+    logger.info(f"Loading models from {model_config.pretrained_model}...")
     
     # Load tokenizer and text encoder
     tokenizer = CLIPTokenizer.from_pretrained(
-        model_config['pretrained_model'],
+        model_config.pretrained_model,
         subfolder="tokenizer"
     )
     text_encoder = CLIPTextModel.from_pretrained(
-        model_config['pretrained_model'],
+        model_config.pretrained_model,
         subfolder="text_encoder"
     )
     
     # Load feature extractor
     feature_extractor = CLIPImageProcessor.from_pretrained(
-        model_config['pretrained_model'],
+        model_config.pretrained_model,
         subfolder="feature_extractor"
     )
     
     # Load VAE
-    vae_path = model_config.get('vae', {}).get('path')
+    vae_path = model_config.vae_path
     if vae_path:
         logger.info(f"Loading custom VAE from {vae_path}...")
         vae = AutoencoderKL.from_pretrained(vae_path)
     else:
         vae = AutoencoderKL.from_pretrained(
-            model_config['pretrained_model'],
+            model_config.pretrained_model,
             subfolder="vae"
         )
     
     # Load UNet
     unet = UNet2DConditionModel.from_pretrained(
-        model_config['pretrained_model'],
+        model_config.pretrained_model,
         subfolder="unet"
     )
     
     # Setup LoRA
     lora_config = LoraConfig(
-        r=training_config.get('lora', {}).get('rank', 64),
-        lora_alpha=training_config.get('lora', {}).get('alpha', 64),
-        lora_dropout=training_config.get('lora', {}).get('dropout', 0.1),
-        target_modules=training_config.get('lora', {}).get('target_modules', 
-                                                          ["to_k", "to_q", "to_v", "to_out.0"]),
-    )
-    
-    # Apply LoRA to UNet
+        r=model_config.lora.rank,
+        lora_alpha=model_config.lora.alpha,
+        lora_dropout=model_config.lora.dropout,
+        target_modules=model_config.lora.target_modules,
+    )    # Apply LoRA to UNet
     unet = get_peft_model(unet, lora_config)
     
     # Print number of trainable parameters
@@ -232,21 +234,19 @@ def main():
     text_encoder.requires_grad_(False)
     
     # Enable gradient checkpointing
-    if training_config.get('gradient_checkpointing', False):
+    if training_config.gradient_checkpointing:
         unet.enable_gradient_checkpointing()
     
-    # Setup noise scheduler  
+    # Setup noise scheduler
     noise_scheduler = DDPMScheduler(
-        beta_start=training_config.get('beta_start', 0.00085),
-        beta_end=training_config.get('beta_end', 0.012),
-        beta_schedule=training_config.get('beta_schedule', 'scaled_linear'),
-        num_train_timesteps=training_config.get('num_train_timesteps', 1000),
-    )
-    
-    # Setup optimizer
+        beta_start=training_config.beta_start,
+        beta_end=training_config.beta_end,
+        beta_schedule=training_config.beta_schedule,
+        num_train_timesteps=training_config.num_train_timesteps,
+    )    # Setup optimizer
     optimizer = torch.optim.AdamW(
         unet.parameters(),
-        lr=training_config.get('learning_rate', 1e-4),
+        lr=training_config.learning_rate,
         betas=(0.9, 0.999),
         weight_decay=1e-2,
         eps=1e-08,
@@ -255,33 +255,33 @@ def main():
     # Create dataset
     logger.info("Creating prior-based dataset...")
     train_dataset = PriorBasedDiffusionDataset(
-        target_images_dir=training_config['target_images_dir'],
-        target_images_csv=training_config['target_images_csv'],
-        prior_images_dir=training_config['prior_images_dir'],
-        prior_images_csv=training_config['prior_images_csv'],
-        target_prompt=training_config['target_prompt'],
-        prior_prompt=training_config['prior_prompt'],
-        repeats_per_target=training_config.get('repeats_per_target', 10),
-        resolution=training_config.get('resolution', 512),
-        center_crop=training_config.get('center_crop', True),
-        random_flip=training_config.get('random_flip', False),
+        target_images_dir=training_config.target_images_dir,
+        target_images_csv=str(training_config.target_images_csv),
+        prior_images_dir=str(training_config.prior_images_dir),
+        prior_images_csv=str(training_config.prior_images_csv),
+        target_prompt=training_config.target_prompt,
+        prior_prompt=training_config.prior_prompt,
+        repeats_per_target=training_config.repeats_per_target,
+        resolution=training_config.resolution,
+        center_crop=training_config.center_crop,
+        random_flip=training_config.random_flip,
         tokenizer=tokenizer,
-        seed=config.get('seed', 42)
+        seed=experiment_config.seed
     )
     
     # Create dataloader
     train_dataloader = DataLoader(
         train_dataset,
-        batch_size=training_config.get('batch_size', 4),
+        batch_size=training_config.train_batch_size,
         shuffle=True,
         collate_fn=collate_fn,
-        num_workers=training_config.get('dataloader_num_workers', 2),
-        pin_memory=training_config.get('pin_memory', True),
+        num_workers=training_config.dataloader_num_workers,
+        pin_memory=training_config.pin_memory,
     )
     
     # Calculate training parameters
-    num_epochs = training_config.get('num_epochs', 20)
-    gradient_accumulation_steps = training_config.get('gradient_accumulation_steps', 1)
+    num_epochs = training_config.num_epochs
+    gradient_accumulation_steps = training_config.gradient_accumulation_steps
     
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / gradient_accumulation_steps)
     max_train_steps = num_epochs * num_update_steps_per_epoch
@@ -326,11 +326,11 @@ def main():
     
     # Initialize trackers for logging (required for TensorBoard)
     tracker_config = {
-        "experiment_name": experiment_config.get('name', 'fibrosis_prior_lora'),
-        "tags": experiment_config.get('tags', []),
+        "experiment_name": experiment_config.name,
+        "tags": ",".join(experiment_config.tags) if experiment_config.tags else "",
     }
     accelerator.init_trackers(
-        project_name=experiment_config.get('name', 'fibrosis_prior_lora'),
+        project_name=experiment_config.name,
         config=tracker_config,
         init_kwargs={"tensorboard": {"flush_secs": 30}}
     )
@@ -339,8 +339,8 @@ def main():
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {len(train_dataset)}")
     logger.info(f"  Num Epochs = {num_epochs}")
-    logger.info(f"  Instantaneous batch size per device = {training_config.get('batch_size', 4)}")
-    logger.info(f"  Total train batch size = {training_config.get('batch_size', 4) * accelerator.num_processes * gradient_accumulation_steps}")
+    logger.info(f"  Instantaneous batch size per device = {training_config.train_batch_size}")
+    logger.info(f"  Total train batch size = {training_config.train_batch_size * accelerator.num_processes * gradient_accumulation_steps}")
     logger.info(f"  Gradient Accumulation steps = {gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {max_train_steps}")
     logger.info(f"  Starting from epoch = {starting_epoch}")
@@ -353,9 +353,14 @@ def main():
         disable=not accelerator.is_local_main_process,
     )
     
+    # Track epoch losses for plotting
+    epoch_losses = []
+    
     for epoch in range(starting_epoch, num_epochs):
         unet.train()
         train_loss = 0.0
+        epoch_loss_sum = 0.0
+        epoch_steps = 0
         
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet):
@@ -385,7 +390,7 @@ def main():
                 loss = F.mse_loss(model_pred.float(), noise.float(), reduction="mean")
                 
                 # Gather losses for logging
-                avg_loss = accelerator.gather(loss.repeat(training_config.get('batch_size', 4))).mean()
+                avg_loss = accelerator.gather(loss.repeat(training_config.train_batch_size)).mean()
                 train_loss += avg_loss.item() / gradient_accumulation_steps
                 
                 # Backward pass
@@ -414,9 +419,15 @@ def main():
                 accelerator.log(logs, step=global_step)
                 train_loss = 0.0
                 
+                # Flush TensorBoard every 100 steps to ensure data is saved
+                if global_step % 100 == 0:
+                    for tracker in accelerator.trackers:
+                        if tracker.name == "tensorboard" and hasattr(tracker.writer, 'flush'):
+                            tracker.writer.flush()
+                
                 # Save checkpoint FIRST (before validation that might crash)
                 # Only save LoRA weights (not full model) to save disk space
-                if global_step % training_config.get('save_steps', 250) == 0:
+                if global_step % training_config.save_steps == 0:
                     if accelerator.is_main_process:
                         checkpoint_dir = output_dir / f"checkpoint-{global_step}"
                         checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -437,7 +448,7 @@ def main():
                         logger.info(f"✅ Saved LoRA checkpoint at step {global_step}")
                 
                 # Generate validation images AFTER checkpoint is saved
-                if global_step % training_config.get('validation_steps', 1000) == 0:
+                if global_step % training_config.validation_steps == 0:
                     if accelerator.is_main_process:
                         logger.info("🎨 Generating validation images...")
                         
@@ -459,14 +470,16 @@ def main():
                                 requires_safety_checker=False,
                             )
                             
-                            # Generate images
-                            validation_prompt = training_config.get('validation_prompt', 'a chest x-ray with fibrosis')
-                            num_validation_images = training_config.get('num_validation_images', 4)
-                            
-                            generator = torch.Generator(device=accelerator.device).manual_seed(config.get('seed', 42))
+                            # Generate images with different seeds for diversity
+                            validation_prompt = training_config.validation_prompt
+                            num_validation_images = training_config.num_validation_images
+                            lora_scale = training_config.lora_scale  # For adjusting LoRA influence during generation
                             
                             validation_images = []
                             for i in range(num_validation_images):
+                                # Use different seed for each image to ensure diversity
+                                generator = torch.Generator(device=accelerator.device).manual_seed(global_step + i)
+                                
                                 with torch.autocast("cuda"):
                                     image = pipeline(
                                         validation_prompt,
@@ -474,6 +487,7 @@ def main():
                                         generator=generator,
                                         height=512,
                                         width=512,
+                                        cross_attention_kwargs={"scale": lora_scale} if lora_scale != 1.0 else None,
                                     ).images[0]
                                 validation_images.append(image)
                             
@@ -502,6 +516,33 @@ def main():
             
             if global_step >= max_train_steps:
                 break
+        
+        # Log epoch average loss
+        if epoch_steps > 0:
+            avg_epoch_loss = epoch_loss_sum / epoch_steps
+            epoch_losses.append(avg_epoch_loss)
+            logger.info(f"Epoch {epoch} average loss: {avg_epoch_loss:.4f}")
+            
+            # Log to tensorboard
+            accelerator.log({"epoch_loss": avg_epoch_loss}, step=global_step)
+    
+    # Save final loss plot
+    if accelerator.is_main_process and len(epoch_losses) > 0:
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend
+        import matplotlib.pyplot as plt
+        
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(len(epoch_losses)), epoch_losses, marker='o', linewidth=2)
+        plt.xlabel('Epoch', fontsize=12)
+        plt.ylabel('Loss', fontsize=12)
+        plt.title('Training Loss Over Time', fontsize=14)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plot_path = output_dir / 'training_loss.png'
+        plt.savefig(plot_path, dpi=150)
+        plt.close()
+        logger.info(f"✅ Loss plot saved to: {plot_path}")
     
     # Save final model
     accelerator.wait_for_everyone()
@@ -513,8 +554,8 @@ def main():
         # Save model card
         save_model_card(
             repo_id=output_dir / "model_card",
-            base_model=model_config['pretrained_model'],
-            prompt=training_config.get('validation_prompt', 'a chest x-ray with fibrosis'),
+            base_model=model_config.pretrained_model,
+            prompt=training_config.validation_prompt,
         )
         
         logger.info(f"Training completed! Model saved to {output_dir}")

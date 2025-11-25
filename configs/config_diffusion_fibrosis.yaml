@@ -19,16 +19,16 @@ training:
   prior_prompt: "a chest x-ray"
   
   # Training parameters
-  repeats_per_target: 10  # Each fibrosis image repeated 10 times with different healthy priors
+  repeats_per_target: 5 # Each fibrosis image repeated 5 times with different healthy priors
   num_epochs: 20  # Reduced from 20 for faster training
   batch_size: 16  # Increased from 4 for 8GB VRAM
-  learning_rate: 0.0001
+  learning_rate: 1e-5
   gradient_accumulation_steps: 1
   
   # LoRA settings
   lora:
     rank: 64
-    alpha: 64
+    alpha: 32
     dropout: 0.1
     target_modules: ["to_k", "to_q", "to_v", "to_out.0"]
     
