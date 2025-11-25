@@ -87,9 +87,10 @@ def find_latest_checkpoint(output_dir):
 def save_model_card(repo_id, images=None, base_model=None, train_text_encoder=False, prompt=None):
     """Save model card for the trained model."""
     img_str = ""
-    for i, image in enumerate(images):
-        image.save(f"image_{i}.png")
-        img_str += f"![img_{i}](./image_{i}.png)\n"
+    if images is not None:
+        for i, image in enumerate(images):
+            image.save(f"image_{i}.png")
+            img_str += f"![img_{i}](./image_{i}.png)\n"
 
     yaml_content = f"""
 ---
