@@ -50,6 +50,17 @@ export CUDA_LAUNCH_BLOCKING=1
 cd "$PROJECT_DIR"
 
 python scripts/evaluate_checkpoints.py \
-    --config configs/config_eval_fibrosis.yaml
+    --config configs/config_eval_fibrosis.yaml \
+    --preset checkpoint \
+    --min-images 100
+
+# Preset options:
+#   --preset checkpoint  (default: novelty, pathology, biovil, diversity - FAST)
+#   --preset diversity   (diversity-focused metrics for mode collapse detection)
+#   --preset full        (all 9 metrics including FMD and t-SNE - EXPENSIVE)
+#
+# Other options:
+#   --min-images 100     (skip generation if >= 100 images exist, default: 100)
+#   --num-images 200     (override config to generate 200 images)
 
 echo "==> Evaluation complete!"

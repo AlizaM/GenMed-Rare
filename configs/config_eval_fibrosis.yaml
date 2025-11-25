@@ -15,9 +15,9 @@ evaluation:
   # List of specific checkpoints to evaluate
   # Format: checkpoint-step-{step_number}
   checkpoint_names:
-    - "checkpoint-6500"
     - "checkpoint-6000"
     - "checkpoint-5000"
+    - "checkpoint-4000"
   
   # Output directory for evaluation results
   output_dir: "/w/20251/alizat/checkpoint_evaluation_fibrosis_16022"
