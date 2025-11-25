@@ -417,12 +417,11 @@ def load_biovil_model(device: str = "cuda"):
     """
     print("Loading BioViL model...")
     model_name = "microsoft/BiomedVLP-CXR-BERT-specialized"
-    
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    from transformers import AutoModel
     model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
     model = model.to(device)
     model.eval()
-    
     return model, tokenizer
 
 
