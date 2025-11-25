@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger("GenMedRareEval")
 """
 Evaluation metrics for diffusion model outputs.
 
@@ -87,7 +89,7 @@ def compute_correlation(img1: np.ndarray, img2: np.ndarray) -> float:
 def find_nearest_neighbor(
     generated_img: np.ndarray,
     training_images: List[np.ndarray],
-    metric: str = "ssim"
+    metric: str = "correlation"
 ) -> Tuple[int, float, np.ndarray]:
     """
     Find nearest neighbor in training set.
@@ -104,47 +106,39 @@ def find_nearest_neighbor(
     best_score = -np.inf
     
     for idx, train_img in enumerate(training_images):
-        if metric == "ssim":
-            score = compute_ssim(generated_img, train_img)
-        elif metric == "correlation":
-            score = compute_correlation(generated_img, train_img)
-        else:
-            raise ValueError(f"Unknown metric: {metric}")
-        
+        score = compute_correlation(generated_img, train_img)
         if score > best_score:
             best_score = score
             best_idx = idx
-    
     return best_idx, best_score, training_images[best_idx]
 
 
 def compute_novelty_metrics(
     generated_images: List[np.ndarray],
     training_images: List[np.ndarray],
-    metric: str = "ssim",
+    metric: str = "correlation",
     show_progress: bool = True
 ) -> Dict[str, any]:
     """
-    Compute novelty metrics for generated images.
-    
-    Lower similarity scores indicate higher novelty (less copying from training set).
+    Compute novelty metrics for generated images using pixel-wise Pearson correlation.
+    Higher correlation means less novelty (more similar to training set).
     
     Args:
         generated_images: List of generated images as numpy arrays
         training_images: List of training images as numpy arrays
-        metric: Similarity metric ("ssim" or "correlation")
+        metric: Similarity metric (default: "correlation")
         show_progress: Show progress bar
     
     Returns:
         Dictionary with:
-            - max_similarity: Maximum similarity to any training image
-            - p99_similarity: 99th percentile similarity
-            - p95_similarity: 95th percentile similarity
-            - mean_similarity: Mean similarity
-            - median_similarity: Median similarity
-            - min_similarity: Minimum similarity
+            - max_similarity: Maximum correlation to any training image
+            - p99_similarity: 99th percentile correlation
+            - p95_similarity: 95th percentile correlation
+            - mean_similarity: Mean correlation
+            - median_similarity: Median correlation
+            - min_similarity: Minimum correlation
             - nn_indices: List of nearest neighbor indices
-            - nn_scores: List of similarity scores
+            - nn_scores: List of correlation scores
     """
     nn_scores = []
     nn_indices = []
@@ -415,14 +409,19 @@ def load_biovil_model(device: str = "cuda"):
     Returns:
         Tuple of (model, tokenizer)
     """
-    print("Loading BioViL model...")
-    model_name = "microsoft/BiomedVLP-CXR-BERT-specialized"
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    from transformers import AutoModel
-    model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
-    model = model.to(device)
-    model.eval()
-    return model, tokenizer
+    logger.info("Loading BioViL model (HI-ML-Multimodal)...")
+    try:
+        from health_multimodal.text.model import CXRBertModel
+        from health_multimodal.image.model.model import ImageModel
+        from health_multimodal.combine import BiovilMultimodalModel
+        # Load pretrained BioViL model (joint image-text)
+        model = BiovilMultimodalModel.from_pretrained("biovil")
+        model = model.to(device)
+        model.eval()
+        return model, None
+    except Exception as e:
+        logger.error(f"BioViL model could not be loaded: {e}")
+        return None, None
 
 
 def compute_biovil_scores(
@@ -450,8 +449,10 @@ def compute_biovil_scores(
     Returns:
         List of similarity scores (one per image)
     """
+    if biovil_model is None:
+        logger.warning("BioViL model not available. Skipping BioViL metric.")
+        return [None] * len(images)
     from torchvision import transforms
-    
     # BioViL preprocessing
     transform = transforms.Compose([
         transforms.ToPILImage(),
@@ -459,42 +460,22 @@ def compute_biovil_scores(
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     ])
-    
     scores = []
     batch_size = 16
-    
     iterator = range(0, len(images), batch_size)
     if show_progress:
         iterator = tqdm(iterator, desc="Computing BioViL scores")
-    
     for i in iterator:
         batch_images = images[i:i + batch_size]
         batch_prompts = prompts[i:i + batch_size]
-        
-        # Process images
         image_tensors = torch.stack([transform(img) for img in batch_images]).to(device)
-        
-        # Process text
-        text_inputs = biovil_tokenizer(
-            batch_prompts,
-            padding=True,
-            truncation=True,
-            return_tensors="pt"
-        ).to(device)
-        
         with torch.no_grad():
-            # Get embeddings
             image_features = biovil_model.get_image_features(image_tensors)
-            text_features = biovil_model.get_text_features(**text_inputs)
-            
-            # Normalize
+            text_features = biovil_model.get_text_features(batch_prompts)
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-            
-            # Compute similarity
             similarity = (image_features * text_features).sum(dim=-1)
             scores.extend(similarity.cpu().numpy().tolist())
-    
     return scores
 
 

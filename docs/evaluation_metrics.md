@@ -6,21 +6,21 @@ Comprehensive metrics for assessing diffusion model quality on chest X-ray gener
 
 Computed individually for each checkpoint to enable direct comparison.
 
-### 1. Novelty (SSIM/Correlation)
+### 1. Novelty (Pixel Correlation)
 
-Measures generated image novelty by computing similarity to nearest training sample.
+Measures generated image novelty by computing pixel-wise Pearson correlation to the nearest training sample.
 
-**Implementation**: For each generated image, compute SSIM (Structural Similarity Index) or pixel correlation against all training images. Report nearest-neighbor statistics.
+**Implementation**: For each generated image, compute pixel correlation against all training images. Report nearest-neighbor statistics.
 
 **Key Statistics**:
-- `max_similarity`: Maximum similarity (identifies potential memorization)
+- `max_similarity`: Maximum correlation (identifies potential memorization)
 - `p99_similarity`: 99th percentile (robust outlier detection)
 - `mean_similarity`, `median_similarity`: Central tendency measures
 
 **Thresholds**:
-- SSIM > 0.9: Potential training set memorization
-- SSIM 0.7-0.9: High similarity, minimal novelty
-- SSIM < 0.7: Novel generation
+- Correlation > 0.9: Potential training set memorization
+- Correlation 0.7-0.9: High similarity, minimal novelty
+- Correlation < 0.7: Novel generation
 
 ---
 
