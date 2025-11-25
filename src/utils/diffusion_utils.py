@@ -49,43 +49,48 @@ def load_pipeline(
         ValueError: If checkpoint format is not recognized
     """
     checkpoint_path = Path(checkpoint_path)
-    
     if not checkpoint_path.exists():
         raise FileNotFoundError(
             f"Checkpoint not found at: {checkpoint_path}\n"
             f"Please verify the checkpoint path is correct."
         )
-    
+
+    # Use rglob to find both adapter_config.json and adapter_model.safetensors
+    adapter_configs = list(checkpoint_path.rglob("adapter_config.json"))
+    adapter_models = list(checkpoint_path.rglob("adapter_model.safetensors"))
+    adapter_dirs = [cfg.parent for cfg in adapter_configs if any(m.parent == cfg.parent for m in adapter_models)]
+    if adapter_dirs:
+        print(f"Found LoRA adapter files in: {adapter_dirs[0]}")
+        checkpoint_path = adapter_dirs[0]
+
     print(f"Loading base model: {pretrained_model}")
-    
+
     # Determine device first
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    
+
     # Set dtype based on device
     dtype = torch.float16 if device == "cuda" else torch.float32
-    
+
     # Load base pipeline
     pipeline = StableDiffusionPipeline.from_pretrained(
         pretrained_model,
         torch_dtype=dtype,
         safety_checker=None,
     )
-    
+
     # Replace scheduler with DDIM for efficient inference
-    # DDIM is trained with the same process as DDPM but enables faster sampling
-    # The pretrained model uses PNDMScheduler, but we want DDIM for deterministic, efficient generation
     from diffusers import DDIMScheduler
     pipeline.scheduler = DDIMScheduler.from_pretrained(
         pretrained_model,
         subfolder="scheduler"
     )
     print(f"✓ Using DDIMScheduler for efficient inference (compatible with DDPM training)")
-    
+
     # Detect checkpoint format
     has_adapter_config = (checkpoint_path / "adapter_config.json").exists()
     has_model_safetensors = (checkpoint_path / "model.safetensors").exists()
-    
+
     if has_adapter_config:
         # Format 1: LoRA adapter files (evaluation-friendly format)
         print(f"Loading LoRA adapter from: {checkpoint_path}")
@@ -181,19 +186,20 @@ def load_pipeline(
             f"Found files:\n{file_list}\n\n"
             f"Please ensure checkpoints are saved in one of these formats."
         )
-    
+
     # Move to device AFTER loading checkpoint
+    # This prevents CUDA misaligned address errors by ensuring proper memory layout
     pipeline = pipeline.to(device)
-    
+
     # Enable memory optimizations
     if enable_attention_slicing:
         pipeline.enable_attention_slicing()
-    
+
     if enable_vae_slicing:
         pipeline.enable_vae_slicing()
-    
-    print(f"Pipeline loaded on {device}")
-    
+
+    print(f"✓ Pipeline ready for inference on {device}")
+
     return pipeline
 
 

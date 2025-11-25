@@ -529,21 +529,9 @@ def main():
     
     # Save final loss plot
     if accelerator.is_main_process and len(epoch_losses) > 0:
-        import matplotlib
-        matplotlib.use('Agg')  # Non-interactive backend
-        import matplotlib.pyplot as plt
-        
-        plt.figure(figsize=(10, 6))
-        plt.plot(range(len(epoch_losses)), epoch_losses, marker='o', linewidth=2)
-        plt.xlabel('Epoch', fontsize=12)
-        plt.ylabel('Loss', fontsize=12)
-        plt.title('Training Loss Over Time', fontsize=14)
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plot_path = output_dir / 'training_loss.png'
-        plt.savefig(plot_path, dpi=150)
-        plt.close()
-        logger.info(f"✅ Loss plot saved to: {plot_path}")
+        from src.utils.tensorboard_loss_plot import plot_loss_from_tensorboard
+        plot_loss_from_tensorboard(paths_config.logging_dir, window_size=5)
+        logger.info(f"✅ Loss plots saved in: {paths_config.logging_dir}")
     
     # Save final model
     accelerator.wait_for_everyone()

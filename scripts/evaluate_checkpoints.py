@@ -492,16 +492,16 @@ def main():
     
     # Store all results
     all_results = {}
-    
+
     # Evaluate each checkpoint
     for checkpoint_name in config.evaluation.checkpoint_names:
         logger.info("=" * 80)
         logger.info(f"Evaluating checkpoint: {checkpoint_name}")
         logger.info("=" * 80)
-        
+
         checkpoint_path = config.evaluation.checkpoint_dir / checkpoint_name
         images_dir = config.evaluation.output_dir / f"{checkpoint_name}_{config.evaluation.label}_images"
-        
+
         # Ensure images exist (generate if needed)
         images_dir = ensure_images_exist(
             checkpoint_name,
@@ -510,10 +510,10 @@ def main():
             config,
             args.min_images
         )
-        
+
         # Evaluate using DiffusionGenerationEvaluator
         logger.info("Running evaluation metrics...")
-        
+
         evaluator = DiffusionGenerationEvaluator(
             generated_images_dir=str(images_dir),
             real_images_dir=str(real_images_dir),
@@ -526,16 +526,31 @@ def main():
             prompt_template=config.data.prompt_template,
             max_real_images=None,  # Use all real images
         )
-        
-        # Run evaluation
-        results = evaluator.evaluate()
-        
-        # Save results
-        evaluator.save_results()
-        
+
+        # Run evaluation with robust error handling
+        results = {}
+        metric_names = [
+            'novelty', 'pathology_confidence', 'biovil', 'diversity',
+            'pixel_variance', 'feature_dispersion', 'self_similarity', 'fmd', 'tsne'
+        ]
+        for metric in metric_names:
+            try:
+                if getattr(evaluator, f'compute_{metric}', False):
+                    metric_result = evaluator.evaluate_metric(metric)
+                    results[metric] = metric_result
+            except Exception as e:
+                logger.error(f"Metric '{metric}' failed for checkpoint '{checkpoint_name}': {e}")
+                results[metric] = None
+
+        # Save results (partial OK)
+        try:
+            evaluator.save_results(results)
+        except Exception as e:
+            logger.error(f"Failed to save results for checkpoint '{checkpoint_name}': {e}")
+
         # Store for comparison
         all_results[checkpoint_name] = results
-        
+
         logger.info(f"✓ Completed evaluation for {checkpoint_name}")
     
     # Create summary comparison table

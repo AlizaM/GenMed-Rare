@@ -50,7 +50,7 @@ export CUDA_LAUNCH_BLOCKING=1
 cd "$PROJECT_DIR"
 
 python scripts/evaluate_checkpoints.py \
-    --config configs/config_eval_fibrosis.yaml \
+    --config configs/config_eval_diffusion.yaml \
     --preset checkpoint \
     --min-images 100
 
