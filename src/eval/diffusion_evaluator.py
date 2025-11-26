@@ -337,79 +337,101 @@ class DiffusionGenerationEvaluator:
         
         # 5. Pixel variance
         if self.compute_pixel_variance:
-            logger.info("=" * 80)
-            logger.info("Computing Pixel Variance")
-            logger.info("=" * 80)
-            pixel_var = compute_intra_class_variance(self.generated_images)
-            self.results['pixel_variance'] = pixel_var
-            logger.info(f"✓ Mean pixel variance: {pixel_var['mean_pixel_variance']:.2f}")
+            try:
+                logger.info("=" * 80)
+                logger.info("Computing Pixel Variance")
+                logger.info("=" * 80)
+                pixel_var = compute_intra_class_variance(self.generated_images)
+                self.results['pixel_variance'] = pixel_var
+                logger.info(f"✓ Mean pixel variance: {pixel_var['mean_pixel_variance']:.2f}")
+            except Exception as e:
+                logger.error(f"✗ Pixel variance metric failed: {e}")
+                self.results['pixel_variance'] = None
         
         # 6. Feature dispersion
         if self.compute_feature_dispersion:
-            self._ensure_xrv_model()
-            logger.info("=" * 80)
-            logger.info("Computing Feature Dispersion")
-            logger.info("=" * 80)
-            dispersion = compute_feature_dispersion(
-                self.generated_images,
-                self.xrv_model,
-                self.device,
-                show_progress=True
-            )
-            self.results['feature_dispersion'] = dispersion
-            logger.info(f"✓ Mean pairwise distance: {dispersion['mean_pairwise_distance']:.2f}")
-            logger.info(f"✓ Trace of covariance: {dispersion['trace_covariance']:.2e}")
+            try:
+                self._ensure_xrv_model()
+                logger.info("=" * 80)
+                logger.info("Computing Feature Dispersion")
+                logger.info("=" * 80)
+                dispersion = compute_feature_dispersion(
+                    self.generated_images,
+                    self.xrv_model,
+                    self.device,
+                    show_progress=True
+                )
+                self.results['feature_dispersion'] = dispersion
+                logger.info(f"✓ Mean pairwise distance: {dispersion['mean_pairwise_distance']:.2f}")
+                logger.info(f"✓ Trace of covariance: {dispersion['trace_covariance']:.2e}")
+            except Exception as e:
+                logger.error(f"✗ Feature dispersion metric failed: {e}")
+                self.results['feature_dispersion'] = None
         
         # 7. Self-similarity
         if self.compute_self_similarity:
-            logger.info("=" * 80)
-            logger.info("Computing Self-Similarity")
-            logger.info("=" * 80)
-            self_sim = compute_self_similarity(
-                self.generated_images,
-                num_samples=self.self_similarity_samples,
-                show_progress=True
-            )
-            self.results['self_similarity'] = self_sim
-            logger.info(f"✓ Mean self-SSIM: {self_sim['mean_self_ssim']:.4f}")
-            logger.info(f"✓ Median self-SSIM: {self_sim['median_self_ssim']:.4f}")
+            try:
+                logger.info("=" * 80)
+                logger.info("Computing Self-Similarity")
+                logger.info("=" * 80)
+                self_sim = compute_self_similarity(
+                    self.generated_images,
+                    num_samples=self.self_similarity_samples,
+                    show_progress=True
+                )
+                self.results['self_similarity'] = self_sim
+                logger.info(f"✓ Mean self-SSIM: {self_sim['mean_self_ssim']:.4f}")
+                logger.info(f"✓ Median self-SSIM: {self_sim['median_self_ssim']:.4f}")
+            except Exception as e:
+                logger.error(f"✗ Self-similarity metric failed: {e}")
+                self.results['self_similarity'] = None
         
         # 8. FMD
         if self.compute_fmd:
-            self._ensure_xrv_model()
-            logger.info("=" * 80)
-            logger.info("Computing FMD (Fréchet MedicalNet Distance)")
-            logger.info("=" * 80)
-            logger.info("This is computationally expensive...")
-            fmd_score = compute_fmd(
-                self.generated_images,
-                self.real_images,
-                self.xrv_model,
-                self.device,
-                show_progress=True
-            )
-            self.results['fmd'] = {'score': float(fmd_score)}
-            logger.info(f"✓ FMD: {fmd_score:.2f}")
+            try:
+                self._ensure_xrv_model()
+                logger.info("=" * 80)
+                logger.info("Computing FMD (Fréchet MedicalNet Distance)")
+                logger.info("=" * 80)
+                logger.info("This is computationally expensive...")
+                fmd_score = compute_fmd(
+                    self.generated_images,
+                    self.real_images,
+                    self.xrv_model,
+                    self.device,
+                    show_progress=True
+                )
+                self.results['fmd'] = {'score': float(fmd_score)}
+                logger.info(f"✓ FMD: {fmd_score:.2f}")
+            except Exception as e:
+                logger.error(f"✗ FMD metric failed: {e}")
+                self.results['fmd'] = None
         
         # 9. t-SNE
         if self.compute_tsne:
-            self._ensure_xrv_model()
-            logger.info("=" * 80)
-            logger.info("Computing t-SNE Overlap")
-            logger.info("=" * 80)
-            logger.info("This is very computationally expensive...")
-            tsne_results = compute_tsne_overlap(
-                self.generated_images,
-                self.real_images,
-                self.xrv_model,
-                self.device,
-                perplexity=self.tsne_perplexity,
-                n_iter=self.tsne_n_iter,
-                show_progress=True
-            )
-            self.results['tsne'] = tsne_results
-            logger.info(f"✓ t-SNE overlap: {tsne_results['overlap_score']:.3f}")
-            logger.info(f"✓ Mean distance: {tsne_results['mean_distance']:.3f}")
+            try:
+                self._ensure_xrv_model()
+                logger.info("=" * 80)
+                logger.info("Computing t-SNE Overlap")
+                logger.info("=" * 80)
+                logger.info("This is very computationally expensive...")
+                tsne_results = compute_tsne_overlap(
+                    self.generated_images,
+                    self.real_images,
+                    self.xrv_model,
+                    self.device,
+                    perplexity=self.tsne_perplexity,
+                    n_iter=self.tsne_n_iter,
+                    show_progress=True
+                )
+                self.results['tsne'] = tsne_results
+                logger.info(f"✓ t-SNE overlap: {tsne_results['overlap_score']:.3f}")
+                logger.info(f"✓ Mean distance: {tsne_results['mean_distance']:.3f}")
+            except Exception as e:
+                logger.error(f"✗ t-SNE metric failed: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                self.results['tsne'] = None
         
         logger.info("=" * 80)
         logger.info("✓ EVALUATION COMPLETE")

@@ -912,12 +912,12 @@ def compute_tsne_overlap(
     
     # Compute t-SNE
     if show_progress:
-        print(f"Computing t-SNE (perplexity={perplexity}, n_iter={n_iter})...")
-    
+        print(f"Computing t-SNE (perplexity={perplexity}, max_iter={n_iter})...")
+
     tsne = TSNE(
         n_components=2,
         perplexity=min(perplexity, len(all_features) - 1),
-        n_iter=n_iter,
+        max_iter=n_iter,  # Changed from n_iter to max_iter for sklearn >= 1.2
         random_state=42,
         verbose=1 if show_progress else 0
     )
