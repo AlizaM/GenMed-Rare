@@ -94,6 +94,18 @@ def parse_args():
         default=42,
         help="Random seed for reproducibility"
     )
+    parser.add_argument(
+        "--lora-scale",
+        type=float,
+        default=1.0,
+        help="LoRA adaptation strength (0.0=disabled, 1.0=full, >1.0=amplified)"
+    )
+    parser.add_argument(
+        "--pathology",
+        type=str,
+        default=None,
+        help="Pathology name (e.g., 'Fibrosis', 'Pneumonia') - used in prompt and filenames"
+    )
     return parser.parse_args()
 
 
@@ -162,57 +174,66 @@ def generate_images_for_prompt(
     num_images: int,
     num_inference_steps: int,
     guidance_scale: float,
+    lora_scale: float,
     negative_prompt: str,
     seed: Optional[int] = None,
 ):
     """
     Generate images from a single prompt.
-    
+
     Wrapper around diffusion_utils.generate_images() for backward compatibility.
     """
     print(f"\nGenerating {num_images} images...")
     print(f"Prompt: {prompt}")
-    
+    print(f"LoRA Scale: {lora_scale}")
+
     images = generate_images(
         pipeline=pipeline,
         prompt=prompt,
         num_images=num_images,
         num_inference_steps=num_inference_steps,
         guidance_scale=guidance_scale,
+        lora_scale=lora_scale,
         negative_prompt=negative_prompt,
         seed=seed,
         return_numpy=False  # Return PIL Images
     )
-    
+
     return images
 
 
-def save_images(images: List[Image.Image], output_dir: Path, prompt: str, start_idx: int = 0):
+def save_images(images: List[Image.Image], output_dir: Path, prompt: str, start_idx: int = 0, pathology: str = None):
     """
     Save generated images to disk.
-    
+
     Args:
         images: List of PIL Images to save
         output_dir: Directory to save images
         prompt: Text prompt used for generation (used in filename)
         start_idx: Starting index for numbering files
-        
+        pathology: Optional pathology name for cleaner filenames
+
     Returns:
         List of saved file paths
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create safe filename from prompt
-    safe_prompt = prompt.replace("A chest X-ray with ", "").replace("a chest x-ray with ", "")
-    safe_prompt = safe_prompt.replace(" ", "_").replace("/", "-")
-    
+
+    # Create safe filename prefix
+    if pathology:
+        # Use pathology name directly
+        safe_prefix = pathology.lower().replace(" ", "_").replace("/", "-")
+    else:
+        # Extract from prompt
+        safe_prefix = prompt.replace("A chest X-ray with ", "").replace("a chest x-ray with ", "")
+        safe_prefix = safe_prefix.replace(" ", "_").replace("/", "-")
+
     saved_paths = []
     for i, img in enumerate(images):
-        filename = f"{safe_prompt}_{start_idx + i:04d}.png"
+        filename = f"{safe_prefix}_{start_idx + i:04d}.png"
         filepath = output_dir / filename
         img.save(filepath)
         saved_paths.append(filepath)
-    
+
     return saved_paths
 
 
@@ -276,6 +297,10 @@ def main():
         print(f"Found {len(prompts)} unique label combinations")
     elif args.prompt:
         prompts = [args.prompt]
+    elif args.pathology:
+        # Use pathology to construct prompt
+        prompts = [f"a chest x-ray with {args.pathology.lower()}"]
+        print(f"Using pathology-based prompt: {prompts[0]}")
     else:
         # Fallback: use validation prompt from training config
         prompts = [config.get('training', {}).get('validation_prompt', 'a chest x-ray')]
@@ -284,15 +309,18 @@ def main():
     print("\n" + "="*60)
     print("Starting Generation")
     print("="*60)
+    print(f"Checkpoint: {args.checkpoint}")
     print(f"Number of prompts: {len(prompts)}")
     print(f"Images per prompt: {args.num_images}")
     print(f"Total images: {len(prompts) * args.num_images}")
     print(f"Inference steps: {args.num_inference_steps}")
     print(f"Guidance scale: {args.guidance_scale}")
+    print(f"LoRA scale: {args.lora_scale}")
     print("="*60 + "\n")
-    
+
     all_results = []
-    
+    total_saved = 0  # Track total images saved for unique filenames
+
     for prompt_idx, prompt in enumerate(tqdm(prompts, desc="Generating")):
         # Generate images
         images = generate_images_for_prompt(
@@ -301,12 +329,20 @@ def main():
             num_images=args.num_images,
             num_inference_steps=args.num_inference_steps,
             guidance_scale=args.guidance_scale,
+            lora_scale=args.lora_scale,
             negative_prompt=negative_prompt,
             seed=args.seed + prompt_idx if args.seed else None,
         )
-        
-        # Save images
-        saved_paths = save_images(images, output_dir, prompt, start_idx=0)
+
+        # Save images with unique indices
+        saved_paths = save_images(
+            images,
+            output_dir,
+            prompt,
+            start_idx=total_saved,
+            pathology=args.pathology
+        )
+        total_saved += len(saved_paths)
         
         # Track results
         for path in saved_paths:

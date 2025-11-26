@@ -570,7 +570,12 @@ def main():
     # Create comparison plots if we have results
     if summary_df is not None and len(summary_df) > 0:
         logger.info("Creating comparison plot...")
-        plot_checkpoint_comparison(summary_df, config.evaluation.output_dir, config.evaluation.label)
+        plot_checkpoint_comparison(
+            summary_df,
+            config.evaluation.output_dir,
+            config.evaluation.label,
+            config.metrics.novelty_metric
+        )
     
     logger.info("=" * 80)
     logger.info("✓ EVALUATION COMPLETE!")
