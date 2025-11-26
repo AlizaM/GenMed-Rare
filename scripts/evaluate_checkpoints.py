@@ -298,47 +298,50 @@ def load_training_images_dir(config: DiffusionEvaluationConfig) -> Path:
     return real_dir
 
 
-def create_summary_table(all_results: Dict, output_dir: Path, label: str, preset: str) -> pd.DataFrame:
+def create_summary_table(all_results: Dict, output_dir: Path, label: str, preset: str, novelty_metric: str = "correlation") -> pd.DataFrame:
     """Create summary comparison table across all checkpoints."""
     logger.info("=" * 80)
     logger.info("Creating summary table...")
     logger.info("=" * 80)
-    
+
+    # Determine column name suffix based on metric
+    metric_suffix = "SSIM" if novelty_metric == "ssim" else "Correlation"
+
     rows = []
     for checkpoint_name, results in all_results.items():
         row = {
             'Checkpoint': checkpoint_name,
             'Label': label,
         }
-        
+
         # Add metrics based on what was computed
-        if 'novelty' in results:
-            row['Max SSIM'] = results['novelty']['max_similarity']
-            row['P99 SSIM'] = results['novelty']['p99_similarity']
-            row['Mean SSIM'] = results['novelty']['mean_similarity']
-        
-        if 'pathology' in results:
+        if 'novelty' in results and results['novelty'] is not None:
+            row[f'Max {metric_suffix}'] = results['novelty']['max_similarity']
+            row[f'P99 {metric_suffix}'] = results['novelty']['p99_similarity']
+            row[f'Mean {metric_suffix}'] = results['novelty']['mean_similarity']
+
+        if 'pathology' in results and results['pathology'] is not None:
             row['Mean Pathology'] = results['pathology']['mean_confidence']
             row['Median Pathology'] = results['pathology']['median_confidence']
         
-        if 'biovil' in results:
-            row['Mean BioViL'] = results['biovil']['mean_score']
-            row['Median BioViL'] = results['biovil']['median_score']
+        if 'biovil' in results and results['biovil'] is not None:
+            row['Mean BioViL'] = results['biovil'].get('mean_score')
+            row['Median BioViL'] = results['biovil'].get('median_score')
         
-        if 'diversity' in results:
+        if 'diversity' in results and results['diversity'] is not None:
             row['Diversity'] = results['diversity']['overall_diversity']
             row['Diversity Std'] = results['diversity']['mean_std']
-        
-        if 'pixel_variance' in results:
+
+        if 'pixel_variance' in results and results['pixel_variance'] is not None:
             row['Pixel Variance'] = results['pixel_variance']['overall_variance']
-        
-        if 'feature_dispersion' in results:
+
+        if 'feature_dispersion' in results and results['feature_dispersion'] is not None:
             row['Feature Dispersion'] = results['feature_dispersion']['log_det']
-        
-        if 'self_similarity' in results:
+
+        if 'self_similarity' in results and results['self_similarity'] is not None:
             row['Self-Similarity'] = results['self_similarity']['mean_ssim']
-        
-        if 'fmd' in results:
+
+        if 'fmd' in results and results['fmd'] is not None:
             row['FMD'] = results['fmd']['fmd']
         
         rows.append(row)
@@ -348,10 +351,13 @@ def create_summary_table(all_results: Dict, output_dir: Path, label: str, preset
         return None
     
     df = pd.DataFrame(rows)
-    
+
     # Compute ranks based on available metrics
-    if 'P99 SSIM' in df.columns:
-        df['Novelty Rank'] = df['P99 SSIM'].rank(ascending=True)  # Lower SSIM is better
+    p99_col = f'P99 {metric_suffix}'
+    if p99_col in df.columns:
+        # Lower similarity = more novel (better)
+        # For both SSIM and Correlation, lower means more different from training
+        df['Novelty Rank'] = df[p99_col].rank(ascending=True)
     
     if 'Mean Pathology' in df.columns:
         df['Pathology Rank'] = df['Mean Pathology'].rank(ascending=False)  # Higher is better
@@ -383,25 +389,25 @@ def create_summary_table(all_results: Dict, output_dir: Path, label: str, preset
     logger.info(f"BEST CHECKPOINT FOR {label}")
     logger.info("=" * 80)
     
-    if 'P99 SSIM' in df.columns:
-        best_novelty = df.loc[df['P99 SSIM'].idxmin()]
-        logger.info(f"\nBest Novelty (lowest P99 SSIM):")
+    if p99_col in df.columns:
+        best_novelty = df.loc[df[p99_col].idxmin()]
+        logger.info(f"\nBest Novelty (lowest {p99_col}):")
         logger.info(f"  Checkpoint: {best_novelty['Checkpoint']}")
-        logger.info(f"  P99 SSIM: {best_novelty['P99 SSIM']:.4f}")
+        logger.info(f"  {p99_col}: {best_novelty[p99_col]:.4f}")
     
-    if 'Mean Pathology' in df.columns:
+    if 'Mean Pathology' in df.columns and df['Mean Pathology'].notna().any():
         best_pathology = df.loc[df['Mean Pathology'].idxmax()]
         logger.info(f"\nBest Pathology Confidence:")
         logger.info(f"  Checkpoint: {best_pathology['Checkpoint']}")
         logger.info(f"  Mean Pathology: {best_pathology['Mean Pathology']:.3f}")
-    
-    if 'Mean BioViL' in df.columns:
+
+    if 'Mean BioViL' in df.columns and df['Mean BioViL'].notna().any():
         best_biovil = df.loc[df['Mean BioViL'].idxmax()]
         logger.info(f"\nBest BioViL Alignment:")
         logger.info(f"  Checkpoint: {best_biovil['Checkpoint']}")
         logger.info(f"  Mean BioViL: {best_biovil['Mean BioViL']:.3f}")
-    
-    if 'Diversity' in df.columns:
+
+    if 'Diversity' in df.columns and df['Diversity'].notna().any():
         best_diversity = df.loc[df['Diversity'].idxmax()]
         logger.info(f"\nBest Diversity:")
         logger.info(f"  Checkpoint: {best_diversity['Checkpoint']}")
@@ -414,7 +420,7 @@ def create_summary_table(all_results: Dict, output_dir: Path, label: str, preset
         logger.info(f"  Combined Score: {best_combined['Combined Score']:.2f}")
         for col in df.columns:
             if col not in ['Checkpoint', 'Label', 'Combined Score'] and not col.endswith('Rank'):
-                if col in best_combined:
+                if col in best_combined and best_combined[col] is not None and not pd.isna(best_combined[col]):
                     logger.info(f"  {col}: {best_combined[col]:.4f}")
     
     logger.info("=" * 80)
@@ -524,32 +530,31 @@ def main():
             **metric_config,
             # Parameters
             prompt_template=config.data.prompt_template,
+            novelty_metric=config.metrics.novelty_metric,
             max_real_images=None,  # Use all real images
         )
 
-        # Run evaluation with robust error handling
-        results = {}
-        metric_names = [
-            'novelty', 'pathology_confidence', 'biovil', 'diversity',
-            'pixel_variance', 'feature_dispersion', 'self_similarity', 'fmd', 'tsne'
-        ]
-        for metric in metric_names:
-            try:
-                if getattr(evaluator, f'compute_{metric}', False):
-                    metric_result = evaluator.evaluate_metric(metric)
-                    results[metric] = metric_result
-            except Exception as e:
-                logger.error(f"Metric '{metric}' failed for checkpoint '{checkpoint_name}': {e}")
-                results[metric] = None
-
-        # Save results (partial OK)
+        # Run evaluation with all enabled metrics
         try:
-            evaluator.save_results(results)
-        except Exception as e:
-            logger.error(f"Failed to save results for checkpoint '{checkpoint_name}': {e}")
+            results = evaluator.evaluate()
 
-        # Store for comparison
-        all_results[checkpoint_name] = results
+            # Save results
+            evaluator.save_results()
+
+            # Print summary
+            evaluator.print_summary()
+
+        except Exception as e:
+            logger.error(f"Evaluation failed for checkpoint '{checkpoint_name}': {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            results = {}
+
+        # Store for comparison (extract metrics from nested structure)
+        # The evaluator returns {'config': {...}, 'novelty': {...}, 'pathology': {...}, ...}
+        # We want just the metric results for comparison
+        metric_results = {k: v for k, v in results.items() if k != 'config'}
+        all_results[checkpoint_name] = metric_results
 
         logger.info(f"✓ Completed evaluation for {checkpoint_name}")
     
@@ -558,7 +563,8 @@ def main():
         all_results,
         config.evaluation.output_dir,
         config.evaluation.label,
-        args.preset
+        args.preset,
+        config.metrics.novelty_metric
     )
     
     # Create comparison plots if we have results

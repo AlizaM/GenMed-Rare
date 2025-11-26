@@ -23,6 +23,7 @@ torchxrayvision
 
 # Medical Image Analysis
 # microsoft/BiomedVLP-CXR-BERT-specialized (loaded via transformers)
+hi-ml-multimodal  # BioViL for medical text-image alignment
 
 # Logging
 tensorboard

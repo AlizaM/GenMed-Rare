@@ -124,61 +124,95 @@ def plot_score_distributions(
 def plot_checkpoint_comparison(
     summary_df,
     output_dir: Path,
-    label: str
+    label: str,
+    novelty_metric: str = "correlation"
 ):
     """
     Create bar plots comparing checkpoints across metrics.
-    
+
     Args:
         summary_df: DataFrame with checkpoint comparison results
         output_dir: Directory to save plots
         label: Label being evaluated
+        novelty_metric: Metric used for novelty ("ssim" or "correlation")
     """
     label_df = summary_df[summary_df['Label'] == label].copy()
-    
+
     if len(label_df) == 0:
         print(f"⚠ No results found for label: {label}")
         return
-    
+
+    # Determine metric suffix based on novelty metric
+    metric_suffix = "SSIM" if novelty_metric == "ssim" else "Correlation"
+    p99_col = f'P99 {metric_suffix}'
+    mean_col = f'Mean {metric_suffix}'
+
+    # Determine text-image alignment column (BioViL or CLIP)
+    if 'Mean BioViL' in label_df.columns:
+        alignment_col = 'Mean BioViL'
+        alignment_label = 'BioViL Score'
+    elif 'Mean CLIP' in label_df.columns:
+        alignment_col = 'Mean CLIP'
+        alignment_label = 'CLIP Score'
+    else:
+        alignment_col = None
+        alignment_label = 'N/A'
+
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    
-    # P99 SSIM (lower is better - more novel)
-    axes[0, 0].bar(range(len(label_df)), label_df['P99 SSIM'])
+
+    # P99 novelty metric (lower is better - more novel)
+    if p99_col in label_df.columns:
+        axes[0, 0].bar(range(len(label_df)), label_df[p99_col])
+        axes[0, 0].set_ylabel(p99_col)
+        axes[0, 0].set_title('Novelty (lower = more novel)')
+    else:
+        axes[0, 0].text(0.5, 0.5, f'{p99_col} not available',
+                        ha='center', va='center', transform=axes[0, 0].transAxes)
     axes[0, 0].set_xticks(range(len(label_df)))
     axes[0, 0].set_xticklabels(label_df['Checkpoint'], rotation=45, ha='right')
-    axes[0, 0].set_ylabel('P99 SSIM')
-    axes[0, 0].set_title('Novelty (lower = more novel)')
     axes[0, 0].grid(True, alpha=0.3)
-    
-    # Mean SSIM
-    axes[0, 1].bar(range(len(label_df)), label_df['Mean SSIM'])
+
+    # Mean novelty metric
+    if mean_col in label_df.columns:
+        axes[0, 1].bar(range(len(label_df)), label_df[mean_col])
+        axes[0, 1].set_ylabel(mean_col)
+        axes[0, 1].set_title('Mean Similarity to Training')
+    else:
+        axes[0, 1].text(0.5, 0.5, f'{mean_col} not available',
+                        ha='center', va='center', transform=axes[0, 1].transAxes)
     axes[0, 1].set_xticks(range(len(label_df)))
     axes[0, 1].set_xticklabels(label_df['Checkpoint'], rotation=45, ha='right')
-    axes[0, 1].set_ylabel('Mean SSIM')
-    axes[0, 1].set_title('Mean Similarity to Training')
     axes[0, 1].grid(True, alpha=0.3)
-    
-    # Mean CLIP (higher is better)
-    axes[1, 0].bar(range(len(label_df)), label_df['Mean CLIP'])
+
+    # Text-image alignment (BioViL or CLIP, higher is better)
+    if alignment_col and alignment_col in label_df.columns:
+        axes[1, 0].bar(range(len(label_df)), label_df[alignment_col])
+        axes[1, 0].set_ylabel(alignment_label)
+        axes[1, 0].set_title('Text-Image Alignment (higher = better)')
+    else:
+        axes[1, 0].text(0.5, 0.5, f'{alignment_label} not available',
+                        ha='center', va='center', transform=axes[1, 0].transAxes)
     axes[1, 0].set_xticks(range(len(label_df)))
     axes[1, 0].set_xticklabels(label_df['Checkpoint'], rotation=45, ha='right')
-    axes[1, 0].set_ylabel('Mean CLIP Score')
-    axes[1, 0].set_title('Text-Image Alignment (higher = better)')
     axes[1, 0].grid(True, alpha=0.3)
-    
+
     # Combined score (lower is better)
-    axes[1, 1].bar(range(len(label_df)), label_df['Combined Score'])
+    if 'Combined Score' in label_df.columns:
+        axes[1, 1].bar(range(len(label_df)), label_df['Combined Score'])
+        axes[1, 1].set_ylabel('Combined Score')
+        axes[1, 1].set_title('Combined Ranking (lower = better)')
+    else:
+        axes[1, 1].text(0.5, 0.5, 'Combined Score not available',
+                        ha='center', va='center', transform=axes[1, 1].transAxes)
     axes[1, 1].set_xticks(range(len(label_df)))
     axes[1, 1].set_xticklabels(label_df['Checkpoint'], rotation=45, ha='right')
-    axes[1, 1].set_ylabel('Combined Score')
-    axes[1, 1].set_title('Combined Ranking (lower = better)')
     axes[1, 1].grid(True, alpha=0.3)
-    
+
     plt.suptitle(f'Checkpoint Comparison - {label}', fontsize=16)
     plt.tight_layout()
-    
+
     output_path = output_dir / f'{label}_checkpoint_comparison.png'
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
-    
+
     print(f"✓ Saved checkpoint comparison to {output_path}")

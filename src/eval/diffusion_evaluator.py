@@ -66,6 +66,7 @@ class DiffusionGenerationEvaluator:
         compute_tsne: bool = False,
         # Parameters
         prompt_template: str = "A chest X-ray showing {label}",
+        novelty_metric: str = "correlation",
         max_real_images: Optional[int] = None,
         self_similarity_samples: int = 100,
         tsne_perplexity: int = 30,
@@ -118,6 +119,7 @@ class DiffusionGenerationEvaluator:
         
         # Parameters
         self.prompt_template = prompt_template
+        self.novelty_metric = novelty_metric
         self.max_real_images = max_real_images
         self.self_similarity_samples = self_similarity_samples
         self.tsne_perplexity = tsne_perplexity
@@ -139,8 +141,8 @@ class DiffusionGenerationEvaluator:
         
         # Models (loaded on demand)
         self.xrv_model = None
-        self.biovil_model = None
-        self.biovil_tokenizer = None
+        self.biovil_image_inference = None
+        self.biovil_text_inference = None
         
         logger.info("=" * 80)
         logger.info("DiffusionGenerationEvaluator initialized")
@@ -204,10 +206,11 @@ class DiffusionGenerationEvaluator:
     
     def _ensure_biovil_model(self):
         """Load BioViL model if not already loaded."""
-        if self.biovil_model is None:
+        if self.biovil_image_inference is None:
             logger.info("Loading BioViL model...")
-            self.biovil_model, self.biovil_tokenizer = load_biovil_model(self.device)
-            logger.info("✓ BioViL model loaded")
+            self.biovil_image_inference, self.biovil_text_inference = load_biovil_model(self.device)
+            if self.biovil_image_inference is not None:
+                logger.info("✓ BioViL model loaded")
     
     def evaluate(self) -> Dict:
         """
@@ -236,73 +239,101 @@ class DiffusionGenerationEvaluator:
         
         # 1. Novelty metrics
         if self.compute_novelty:
-            logger.info("=" * 80)
-            logger.info("Computing Novelty Metrics (SSIM)")
-            logger.info("=" * 80)
-            novelty = compute_novelty_metrics(
-                self.generated_images,
-                self.real_images,
-                metric="ssim",
-                show_progress=True
-            )
-            self.results['novelty'] = novelty
-            logger.info(f"✓ Max SSIM: {novelty['max_similarity']:.4f}")
-            logger.info(f"✓ P99 SSIM: {novelty['p99_similarity']:.4f}")
-            logger.info(f"✓ Mean SSIM: {novelty['mean_similarity']:.4f}")
+            try:
+                logger.info("=" * 80)
+                logger.info(f"Computing Novelty Metrics ({self.novelty_metric.upper()})")
+                logger.info("=" * 80)
+                novelty = compute_novelty_metrics(
+                    self.generated_images,
+                    self.real_images,
+                    metric=self.novelty_metric,
+                    show_progress=True
+                )
+                self.results['novelty'] = novelty
+                metric_name = "SSIM" if self.novelty_metric == "ssim" else "Correlation"
+                logger.info(f"✓ Max {metric_name}: {novelty['max_similarity']:.4f}")
+                logger.info(f"✓ P99 {metric_name}: {novelty['p99_similarity']:.4f}")
+                logger.info(f"✓ Mean {metric_name}: {novelty['mean_similarity']:.4f}")
+            except Exception as e:
+                logger.error(f"✗ Novelty metric failed: {e}")
+                self.results['novelty'] = None
         
         # 2. Pathology confidence
         if self.compute_pathology_confidence:
-            self._ensure_xrv_model()
-            logger.info("=" * 80)
-            logger.info(f"Computing Pathology Confidence ({self.label})")
-            logger.info("=" * 80)
-            pathology = compute_pathology_confidence(
-                self.generated_images,
-                self.label,
-                self.xrv_model,
-                self.device,
-                show_progress=True
-            )
-            self.results['pathology'] = pathology
-            logger.info(f"✓ Mean confidence: {pathology['mean_confidence']:.3f}")
-            logger.info(f"✓ Median confidence: {pathology['median_confidence']:.3f}")
+            try:
+                self._ensure_xrv_model()
+                logger.info("=" * 80)
+                logger.info(f"Computing Pathology Confidence ({self.label})")
+                logger.info("=" * 80)
+                pathology = compute_pathology_confidence(
+                    self.generated_images,
+                    self.label,
+                    self.xrv_model,
+                    self.device,
+                    show_progress=True
+                )
+                self.results['pathology'] = pathology
+                logger.info(f"✓ Mean confidence: {pathology['mean_confidence']:.3f}")
+                logger.info(f"✓ Median confidence: {pathology['median_confidence']:.3f}")
+            except Exception as e:
+                logger.error(f"✗ Pathology confidence failed: {e}")
+                self.results['pathology'] = None
         
         # 3. BioViL scores
         if self.compute_biovil:
-            self._ensure_biovil_model()
-            logger.info("=" * 80)
-            logger.info("Computing BioViL Scores")
-            logger.info("=" * 80)
-            prompt = self.prompt_template.format(label=self.label)
-            prompts = [prompt] * len(self.generated_images)
-            biovil_scores = compute_biovil_scores(
-                self.generated_images,
-                prompts,
-                self.biovil_model,
-                self.biovil_tokenizer,
-                self.device,
-                show_progress=True
-            )
-            biovil_metrics = compute_score_metrics(biovil_scores)
-            self.results['biovil'] = biovil_metrics
-            logger.info(f"✓ Mean BioViL: {biovil_metrics['mean_score']:.3f}")
-            logger.info(f"✓ Median BioViL: {biovil_metrics['median_score']:.3f}")
+            try:
+                self._ensure_biovil_model()
+                logger.info("=" * 80)
+                logger.info("Computing BioViL Scores")
+                logger.info("=" * 80)
+                prompt = self.prompt_template.format(label=self.label)
+                prompts = [prompt] * len(self.generated_images)
+                biovil_scores = compute_biovil_scores(
+                    self.generated_images,
+                    prompts,
+                    self.biovil_image_inference,
+                    self.biovil_text_inference,
+                    self.device,
+                    show_progress=True
+                )
+                biovil_metrics = compute_score_metrics(biovil_scores)
+                self.results['biovil'] = biovil_metrics
+                if biovil_metrics and biovil_metrics.get('mean_score') is not None:
+                    logger.info(f"✓ Mean BioViL: {biovil_metrics['mean_score']:.3f}")
+                    logger.info(f"✓ Median BioViL: {biovil_metrics['median_score']:.3f}")
+                else:
+                    logger.warning("✗ BioViL model not available or all scores failed")
+            except Exception as e:
+                logger.error(f"✗ BioViL metric failed: {e}")
+                self.results['biovil'] = None
         
         # 4. Diversity (XRV std dev)
+        logger.info(f"DEBUG: compute_diversity = {self.compute_diversity}")
         if self.compute_diversity:
-            self._ensure_xrv_model()
-            logger.info("=" * 80)
-            logger.info("Computing Diversity (XRV Std Dev)")
-            logger.info("=" * 80)
-            diversity = compute_diversity_metrics(
-                self.generated_images,
-                self.xrv_model,
-                self.device,
-                show_progress=True
-            )
-            self.results['diversity'] = diversity
-            logger.info(f"✓ Overall diversity: {diversity['overall_diversity']:.4f}")
-            logger.info(f"✓ Mean std: {diversity['mean_std']:.4f}")
+            try:
+                logger.info("DEBUG: Starting diversity computation...")
+                self._ensure_xrv_model()
+                logger.info("=" * 80)
+                logger.info("Computing Diversity (XRV Std Dev)")
+                logger.info("=" * 80)
+                logger.info(f"Number of images for diversity: {len(self.generated_images)}")
+                diversity = compute_diversity_metrics(
+                    self.generated_images,
+                    self.xrv_model,
+                    self.device,
+                    show_progress=True
+                )
+                logger.info("DEBUG: Diversity computation completed")
+                self.results['diversity'] = diversity
+                logger.info(f"✓ Overall diversity: {diversity['overall_diversity']:.4f}")
+                logger.info(f"✓ Mean std: {diversity['mean_std']:.4f}")
+            except Exception as e:
+                logger.error(f"✗ Diversity metric failed: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                self.results['diversity'] = None
+        else:
+            logger.info("DEBUG: Skipping diversity (compute_diversity=False)")
         
         # 5. Pixel variance
         if self.compute_pixel_variance:
@@ -472,33 +503,37 @@ class DiffusionGenerationEvaluator:
         logger.info(f"Generated images: {self.results['config']['num_generated']}")
         logger.info(f"Real images: {self.results['config']['num_real']}")
         logger.info("")
-        
-        if 'novelty' in self.results:
+
+        # Determine metric name for novelty
+        metric_name = "SSIM" if self.novelty_metric == "ssim" else "Correlation"
+
+        if 'novelty' in self.results and self.results['novelty'] is not None:
             logger.info("Novelty:")
-            logger.info(f"  P99 SSIM: {self.results['novelty']['p99_similarity']:.4f} (lower = more novel)")
-        
-        if 'pathology' in self.results:
+            logger.info(f"  P99 {metric_name}: {self.results['novelty']['p99_similarity']:.4f} (lower = more novel)")
+
+        if 'pathology' in self.results and self.results['pathology'] is not None:
             logger.info("Pathology Confidence:")
             logger.info(f"  Mean: {self.results['pathology']['mean_confidence']:.3f} (higher = better)")
-        
-        if 'biovil' in self.results:
-            logger.info("BioViL:")
-            logger.info(f"  Mean: {self.results['biovil']['mean_score']:.3f} (higher = better)")
-        
-        if 'diversity' in self.results:
+
+        if 'biovil' in self.results and self.results['biovil'] is not None:
+            if self.results['biovil'].get('mean_score') is not None:
+                logger.info("BioViL:")
+                logger.info(f"  Mean: {self.results['biovil']['mean_score']:.3f} (higher = better)")
+
+        if 'diversity' in self.results and self.results['diversity'] is not None:
             logger.info("Diversity:")
             logger.info(f"  Overall: {self.results['diversity']['overall_diversity']:.4f} (higher = more diverse)")
         
-        if 'self_similarity' in self.results:
+        if 'self_similarity' in self.results and self.results['self_similarity'] is not None:
             logger.info("Self-Similarity:")
             logger.info(f"  Mean: {self.results['self_similarity']['mean_self_ssim']:.4f} (lower = more diverse)")
-        
-        if 'fmd' in self.results:
+
+        if 'fmd' in self.results and self.results['fmd'] is not None:
             logger.info("FMD:")
             logger.info(f"  Score: {self.results['fmd']['score']:.2f} (lower = better match to real)")
-        
-        if 'tsne' in self.results:
+
+        if 'tsne' in self.results and self.results['tsne'] is not None:
             logger.info("t-SNE:")
             logger.info(f"  Overlap: {self.results['tsne']['overlap_score']:.3f} (higher = better)")
-        
+
         logger.info("=" * 80)
