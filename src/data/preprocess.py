@@ -330,9 +330,17 @@ def crop_border_and_resize(image: np.ndarray, crop_pixels: int = 10, target_size
     This removes artifacts (e.g., white borders) from generated images while maintaining
     a consistent zoom level across real and generated images.
 
+    The crop is applied PROPORTIONALLY based on image size relative to 512px.
+    For example, if crop_pixels=10:
+    - 512x512 image: crops 10px from each side (2% of image)
+    - 1024x1024 image: crops 20px from each side (2% of image)
+
+    This ensures both generated (512x512) and real (1024x1024) images have
+    the same effective zoom after cropping.
+
     Args:
         image: Input image as numpy array (H, W, C) or (H, W), dtype=uint8 in range [0, 255]
-        crop_pixels: Number of pixels to crop from each side (default: 10)
+        crop_pixels: Number of pixels to crop from each side at 512px scale (default: 10)
         target_size: Target size for output image (default: 512 for 512×512)
 
     Returns:
@@ -361,13 +369,18 @@ def crop_border_and_resize(image: np.ndarray, crop_pixels: int = 10, target_size
     # Get original dimensions
     width, height = pil_img.size
 
+    # Scale crop pixels proportionally to image size (relative to 512px base)
+    # This ensures same zoom level regardless of input resolution
+    scale_factor = width / 512.0  # Assume square images
+    actual_crop = int(crop_pixels * scale_factor)
+
     # Crop from all sides
     # Box format: (left, upper, right, lower)
     crop_box = (
-        crop_pixels,           # left
-        crop_pixels,           # upper
-        width - crop_pixels,   # right
-        height - crop_pixels   # lower
+        actual_crop,           # left
+        actual_crop,           # upper
+        width - actual_crop,   # right
+        height - actual_crop   # lower
     )
 
     cropped_img = pil_img.crop(crop_box)

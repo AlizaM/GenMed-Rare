@@ -316,9 +316,9 @@ def create_summary_table(all_results: Dict, output_dir: Path, label: str, preset
 
         # Add metrics based on what was computed
         if 'novelty' in results and results['novelty'] is not None:
-            row[f'Max {metric_suffix}'] = results['novelty']['max_similarity']
-            row[f'P99 {metric_suffix}'] = results['novelty']['p99_similarity']
-            row[f'Mean {metric_suffix}'] = results['novelty']['mean_similarity']
+            row[f'Max Novelty'] = results['novelty']['max_novelty']
+            row[f'P99 Novelty'] = results['novelty']['p99_novelty']
+            row[f'Mean Novelty'] = results['novelty']['mean_novelty']
 
         if 'pathology' in results and results['pathology'] is not None:
             row['Mean Pathology'] = results['pathology']['mean_confidence']

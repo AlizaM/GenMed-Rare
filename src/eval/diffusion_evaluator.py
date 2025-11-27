@@ -175,11 +175,14 @@ class DiffusionGenerationEvaluator:
         logger.info("=" * 80)
     
     def load_images(self):
-        """Load generated and real images with optional border cropping."""
+        """Load generated and real images as grayscale with optional border cropping."""
         logger.info("Loading images...")
+        logger.info("  All images loaded as grayscale (medical X-rays)")
 
         if self.crop_border_pixels > 0:
-            logger.info(f"  Applying border crop: {self.crop_border_pixels}px from each side")
+            logger.info(f"  Border crop enabled: {self.crop_border_pixels}px (scaled proportionally to image size)")
+            logger.info(f"    - 512x512 images: {self.crop_border_pixels}px crop")
+            logger.info(f"    - 1024x1024 images: {self.crop_border_pixels * 2}px crop (same zoom ratio)")
 
         # Load generated images
         logger.info(f"Loading generated images from {self.generated_images_dir}...")
@@ -188,7 +191,7 @@ class DiffusionGenerationEvaluator:
             raise ValueError(f"No images found in {self.generated_images_dir}")
 
         for img_path in tqdm(gen_files, desc="Loading generated"):
-            img = Image.open(img_path)
+            img = Image.open(img_path).convert('L')  # Convert to grayscale
             img_np = pil_to_numpy(img)
 
             # Apply border cropping if requested
@@ -197,7 +200,7 @@ class DiffusionGenerationEvaluator:
 
             self.generated_images.append(img_np)
 
-        logger.info(f"✓ Loaded {len(self.generated_images)} generated images")
+        logger.info(f"✓ Loaded {len(self.generated_images)} generated images (shape: {self.generated_images[0].shape})")
 
         # Load real images
         logger.info(f"Loading real images from {self.real_images_dir}...")
@@ -210,7 +213,7 @@ class DiffusionGenerationEvaluator:
             real_files = real_files[:self.max_real_images]
 
         for img_path in tqdm(real_files, desc="Loading real"):
-            img = Image.open(img_path)
+            img = Image.open(img_path).convert('L')  # Convert to grayscale
             img_np = pil_to_numpy(img)
 
             # Apply border cropping if requested
@@ -219,7 +222,7 @@ class DiffusionGenerationEvaluator:
 
             self.real_images.append(img_np)
 
-        logger.info(f"✓ Loaded {len(self.real_images)} real images")
+        logger.info(f"✓ Loaded {len(self.real_images)} real images (shape: {self.real_images[0].shape})")
 
         # Load healthy images if directory provided
         if self.healthy_images_dir is not None and self.compute_tsne:
@@ -235,7 +238,7 @@ class DiffusionGenerationEvaluator:
                     healthy_files = healthy_files[:len(self.generated_images)]
 
                 for img_path in tqdm(healthy_files, desc="Loading healthy"):
-                    img = Image.open(img_path)
+                    img = Image.open(img_path).convert('L')  # Convert to grayscale
                     img_np = pil_to_numpy(img)
 
                     # Apply border cropping if requested
@@ -244,7 +247,7 @@ class DiffusionGenerationEvaluator:
 
                     self.healthy_images.append(img_np)
 
-                logger.info(f"✓ Loaded {len(self.healthy_images)} healthy images")
+                logger.info(f"✓ Loaded {len(self.healthy_images)} healthy images (shape: {self.healthy_images[0].shape})")
     
     def _ensure_xrv_model(self):
         """Load TorchXRayVision model if not already loaded."""
@@ -300,9 +303,9 @@ class DiffusionGenerationEvaluator:
                 )
                 self.results['novelty'] = novelty
                 metric_name = "SSIM" if self.novelty_metric == "ssim" else "Correlation"
-                logger.info(f"✓ Max {metric_name}: {novelty['max_similarity']:.4f}")
-                logger.info(f"✓ P99 {metric_name}: {novelty['p99_similarity']:.4f}")
-                logger.info(f"✓ Mean {metric_name}: {novelty['mean_similarity']:.4f}")
+                logger.info(f"✓ Max Novelty (1-{metric_name}): {novelty['max_novelty']:.4f}")
+                logger.info(f"✓ P99 Novelty (1-{metric_name}): {novelty['p99_novelty']:.4f}")
+                logger.info(f"✓ Mean Novelty (1-{metric_name}): {novelty['mean_novelty']:.4f}")
             except Exception as e:
                 logger.error(f"✗ Novelty metric failed: {e}")
                 self.results['novelty'] = None
@@ -490,12 +493,13 @@ class DiffusionGenerationEvaluator:
         return self.results
     
     def save_results(self):
-        """Save results to YAML file."""
+        """Save results to YAML file (summary) and JSON file (full results)."""
+        # Save summary YAML (without large arrays)
         results_path = self.output_dir / f"{self.label}_evaluation_results.yaml"
-        
+
         # Create a copy without large lists for summary
         summary = {k: v for k, v in self.results.items()}
-        
+
         # Remove large arrays to keep file size manageable
         if 'novelty' in summary and summary['novelty'] is not None and 'nn_scores' in summary['novelty']:
             summary['novelty'] = {k: v for k, v in summary['novelty'].items()
@@ -515,11 +519,36 @@ class DiffusionGenerationEvaluator:
         if 'tsne' in summary and summary['tsne'] is not None:
             summary['tsne'] = {k: v for k, v in summary['tsne'].items()
                               if k not in ['tsne_embeddings', 'labels']}
-        
+
+        # Save summary YAML
         with open(results_path, 'w') as f:
             yaml.dump(summary, f, default_flow_style=False)
-        
-        logger.info(f"✓ Results saved to {results_path}")
+
+        logger.info(f"✓ Summary saved to {results_path}")
+
+        # Save full results as JSON (includes per-image scores for augmentation)
+        json_path = self.output_dir / f"{self.label}_evaluation_full.json"
+        import json
+
+        # Convert numpy arrays to lists for JSON serialization
+        full_results = {}
+        for key, value in self.results.items():
+            if value is None:
+                full_results[key] = None
+            elif isinstance(value, dict):
+                full_results[key] = {}
+                for k, v in value.items():
+                    if isinstance(v, np.ndarray):
+                        full_results[key][k] = v.tolist()
+                    else:
+                        full_results[key][k] = v
+            else:
+                full_results[key] = value
+
+        with open(json_path, 'w') as f:
+            json.dump(full_results, f, indent=2)
+
+        logger.info(f"✓ Full results saved to {json_path}")
     
     def create_visualizations(self):
         """Create visualization plots."""
@@ -654,7 +683,7 @@ class DiffusionGenerationEvaluator:
 
         if 'novelty' in self.results and self.results['novelty'] is not None:
             logger.info("Novelty:")
-            logger.info(f"  P99 {metric_name}: {self.results['novelty']['p99_similarity']:.4f} (lower = more novel)")
+            logger.info(f"  P99 Novelty (1-{metric_name}): {self.results['novelty']['p99_novelty']:.4f} (higher = more novel)")
 
         if 'pathology' in self.results and self.results['pathology'] is not None:
             logger.info("Pathology Confidence:")

@@ -34,7 +34,8 @@ def compute_ssim(img1: np.ndarray, img2: np.ndarray) -> float:
     Compute Structural Similarity Index (SSIM) between two images.
 
     Optimized for batch processing:
-    - Avoids unnecessary resize when shapes match
+    - Converts to grayscale first (medical images are grayscale)
+    - Only resizes if spatial dimensions differ
     - Uses weighted grayscale conversion (ITU-R 601-2 luma)
     - Explicit dtype handling for faster normalization
 
@@ -43,24 +44,15 @@ def compute_ssim(img1: np.ndarray, img2: np.ndarray) -> float:
         img2: Second image as numpy array [0, 255]
 
     Returns:
-        SSIM score in range [0, 1]
+        SSIM score in range [-1, 1]
     """
-    # Fast path: check if resize is needed
-    if img1.shape != img2.shape:
-        from skimage.transform import resize
-        # Resize img2 to match img1
-        img2 = resize(img2, img1.shape, anti_aliasing=True, preserve_range=True)
-
-    # Convert to grayscale using perceptually-weighted conversion
+    # Convert to grayscale FIRST (before checking spatial dimensions)
     # ITU-R 601-2 luma: Y = 0.299*R + 0.587*G + 0.114*B
-    # This is more accurate than simple mean and just as fast
     if len(img1.shape) == 3 and img1.shape[2] == 3:
-        # Fast RGB to grayscale using dot product
         weights = np.array([0.299, 0.587, 0.114], dtype=np.float32)
         img1_gray = np.dot(img1[..., :3], weights)
     elif len(img1.shape) == 3:
-        # Fallback: simple mean for non-RGB
-        img1_gray = np.mean(img1, axis=2)
+        img1_gray = img1.squeeze(-1)
     else:
         img1_gray = img1
 
@@ -68,16 +60,31 @@ def compute_ssim(img1: np.ndarray, img2: np.ndarray) -> float:
         weights = np.array([0.299, 0.587, 0.114], dtype=np.float32)
         img2_gray = np.dot(img2[..., :3], weights)
     elif len(img2.shape) == 3:
-        img2_gray = np.mean(img2, axis=2)
+        img2_gray = img2.squeeze(-1)
     else:
         img2_gray = img2
+
+    # Now check spatial dimensions and resize if needed
+    if img1_gray.shape != img2_gray.shape:
+        from skimage.transform import resize
+        # Resize img2 to match img1
+        img2_gray = resize(img2_gray, img1_gray.shape, anti_aliasing=True, preserve_range=True)
 
     # Normalize to [0, 1] with explicit dtype conversion
     # Using float32 instead of float64 for 2x memory efficiency
     if img1_gray.dtype == np.uint8:
         img1_gray = img1_gray.astype(np.float32) / 255.0
+    elif img1_gray.dtype != np.float32:
+        img1_gray = img1_gray.astype(np.float32)
+        if img1_gray.max() > 1.0:
+            img1_gray = img1_gray / 255.0
+
     if img2_gray.dtype == np.uint8:
         img2_gray = img2_gray.astype(np.float32) / 255.0
+    elif img2_gray.dtype != np.float32:
+        img2_gray = img2_gray.astype(np.float32)
+        if img2_gray.max() > 1.0:
+            img2_gray = img2_gray / 255.0
 
     # scikit-image's SSIM is already optimized (Cython implementation)
     return ssim(img1_gray, img2_gray, data_range=1.0)
@@ -120,6 +127,26 @@ def compute_correlation(img1: np.ndarray, img2: np.ndarray) -> float:
     return numerator / denominator
 
 
+def _to_grayscale(img: np.ndarray) -> np.ndarray:
+    """
+    Convert image to grayscale if RGB.
+
+    Args:
+        img: Image array, either (H, W) grayscale or (H, W, 3) RGB
+
+    Returns:
+        Grayscale image (H, W)
+    """
+    if len(img.shape) == 3 and img.shape[2] == 3:
+        # RGB to grayscale using ITU-R 601-2 luma weights
+        weights = np.array([0.299, 0.587, 0.114], dtype=np.float32)
+        return np.dot(img[..., :3], weights).astype(img.dtype)
+    elif len(img.shape) == 3:
+        # Single channel with extra dim, squeeze it
+        return img.squeeze(-1)
+    return img
+
+
 def compute_correlation_batch(
     gen_img: np.ndarray,
     train_images: List[np.ndarray]
@@ -128,34 +155,32 @@ def compute_correlation_batch(
     Compute correlation between one generated image and all training images.
 
     Fully vectorized for maximum performance (~1000x faster than loop).
-    Handles images of different sizes by resizing to match generated image.
+    Converts RGB to grayscale for comparison (medical images are grayscale).
 
     Args:
-        gen_img: Single generated image (H, W, C) uint8
-        train_images: List of training images (any size) uint8
+        gen_img: Single generated image (H, W) or (H, W, 3) uint8
+        train_images: List of training images (H, W) uint8
 
     Returns:
         Array of correlation scores, shape (num_train_images,)
     """
-    target_shape = gen_img.shape
-    gen_flat = gen_img.flatten().astype(np.float32)
+    # Convert generated image to grayscale if RGB
+    gen_gray = _to_grayscale(gen_img)
+    train_gray = [_to_grayscale(img) for img in train_images]
 
-    # Check if resize is needed by looking at first training image
-    # (all training images should be same size after preprocessing)
-    if train_images[0].shape == target_shape:
-        # Fast path: all same size (expected case - both 512×512)
-        train_stack = np.stack([img.flatten() for img in train_images], axis=0).astype(np.float32)
-    else:
-        # Rare case: size mismatch, resize all training images
+    # Now check spatial dimensions only
+    gen_shape = gen_gray.shape[:2]
+    train_shape = train_gray[0].shape[:2]
+
+    if gen_shape != train_shape:
+        # Resize generated image to match training (training images are preprocessed)
         from skimage.transform import resize
-        logger.warning(
-            f"Size mismatch: training={train_images[0].shape}, generated={target_shape}. "
-            f"Resizing {len(train_images)} training images."
-        )
-        train_stack = np.stack([
-            resize(img, target_shape, anti_aliasing=True, preserve_range=True).astype(np.uint8).flatten()
-            for img in train_images
-        ], axis=0).astype(np.float32)
+        gen_gray = resize(gen_gray, train_shape, anti_aliasing=True, preserve_range=True).astype(np.uint8)
+
+    gen_flat = gen_gray.flatten().astype(np.float32)
+
+    # Stack all training images (already grayscale)
+    train_stack = np.stack([img.flatten() for img in train_gray], axis=0).astype(np.float32)
 
     # Vectorized correlation computation across all training images at once
     # For each training image: corr = cov(x,y) / (std(x) * std(y))
@@ -244,95 +269,58 @@ def find_nearest_neighbor(
 def compute_novelty_metrics(
     generated_images: List[np.ndarray],
     training_images: List[np.ndarray],
-    metric: str = "correlation",
+    metric: str = "ssim",
     show_progress: bool = True
 ) -> Dict[str, any]:
     """
-    Compute novelty metrics for generated images using pixel-wise Pearson correlation.
-    Higher correlation means less novelty (more similar to training set).
+    Compute novelty metrics for generated images.
+
+    Novelty is defined as 1 - similarity, so:
+    - Higher novelty score = more different from training set (more novel)
+    - Lower novelty score = more similar to training set (less novel)
 
     Args:
         generated_images: List of generated images as numpy arrays
         training_images: List of training images as numpy arrays
-        metric: Similarity metric (default: "correlation")
+        metric: Similarity metric ("ssim" or "correlation", default: "ssim")
         show_progress: Show progress bar
 
     Returns:
         Dictionary with:
-            - max_similarity: Maximum correlation to any training image
-            - p99_similarity: 99th percentile correlation
-            - p95_similarity: 95th percentile correlation
-            - mean_similarity: Mean correlation
-            - median_similarity: Median correlation
-            - min_similarity: Minimum correlation
+            - max_novelty: Maximum novelty (1 - min_similarity)
+            - p99_novelty: 99th percentile novelty
+            - p95_novelty: 95th percentile novelty
+            - mean_novelty: Mean novelty
+            - median_novelty: Median novelty
+            - min_novelty: Minimum novelty (1 - max_similarity)
             - nn_indices: List of nearest neighbor indices
-            - nn_scores: List of correlation scores
+            - nn_scores: List of novelty scores (1 - similarity)
     """
-    nn_scores = []
+    nn_similarity_scores = []
     nn_indices = []
-
-    # Pre-process training images once for correlation (avoids re-flattening 100 times)
-    train_images_processed = None
-    if metric == "correlation":
-        # Training images are 1024×1024 grayscale, generated are 512×512 RGB
-        # Resize and convert all training images in one batch operation
-        from scipy.ndimage import zoom
-
-        target_shape = generated_images[0].shape  # (512, 512, 3)
-        train_shape = training_images[0].shape     # (1024, 1024) or (1024, 1024, 1)
-
-        if train_shape == target_shape:
-            # Fast path: already same size and channels (unlikely but handle it)
-            train_images_processed = np.stack(
-                [img.flatten() for img in training_images], axis=0
-            ).astype(np.float32)
-        else:
-            # Stack all training images into batch: (N, H, W) or (N, H, W, 1)
-            train_batch = np.stack(training_images, axis=0)
-
-            # Ensure 3D shape (N, H, W)
-            if len(train_batch.shape) == 4 and train_batch.shape[-1] == 1:
-                train_batch = train_batch.squeeze(-1)
-
-            # Calculate zoom factor (1024 -> 512 = 0.5x)
-            zoom_factor = target_shape[0] / train_batch.shape[1]
-
-            # Batch resize using scipy zoom (much faster than skimage resize!)
-            # zoom works per-image in the loop, but it's still ~3-5x faster than skimage
-            resized_batch = np.stack([
-                zoom(img, zoom_factor, order=1).astype(np.uint8)  # order=1 = bilinear
-                for img in train_batch
-            ], axis=0)  # (N, 512, 512)
-
-            # Convert grayscale to RGB: (N, 512, 512) -> (N, 512, 512, 3)
-            resized_batch = np.stack([resized_batch] * 3, axis=-1)
-
-            # Flatten each image: (N, 512, 512, 3) -> (N, 512*512*3)
-            train_images_processed = resized_batch.reshape(len(training_images), -1).astype(np.float32)
 
     iterator = tqdm(generated_images, desc=f"Computing {metric} novelty") if show_progress else generated_images
 
     for gen_img in iterator:
-        if metric == "correlation" and train_images_processed is not None:
-            # Use pre-processed training images for fast batch correlation
-            nn_idx, nn_score = _find_nearest_neighbor_correlation_fast(gen_img, train_images_processed)
-        else:
-            # Fall back to per-image computation for SSIM
-            nn_idx, nn_score, _ = find_nearest_neighbor(gen_img, training_images, metric)
-        nn_scores.append(nn_score)
+        # Find nearest neighbor (most similar training image)
+        nn_idx, similarity_score, _ = find_nearest_neighbor(gen_img, training_images, metric)
+
+        nn_similarity_scores.append(similarity_score)
         nn_indices.append(nn_idx)
 
-    nn_scores = np.array(nn_scores)
+    # Convert similarity scores to novelty scores (1 - similarity)
+    nn_similarity_scores = np.array(nn_similarity_scores)
+    nn_novelty_scores = 1.0 - nn_similarity_scores
 
     return {
-        'max_similarity': float(np.max(nn_scores)),
-        'p99_similarity': float(np.percentile(nn_scores, 99)),
-        'p95_similarity': float(np.percentile(nn_scores, 95)),
-        'mean_similarity': float(np.mean(nn_scores)),
-        'median_similarity': float(np.median(nn_scores)),
-        'min_similarity': float(np.min(nn_scores)),
+        'max_novelty': float(np.max(nn_novelty_scores)),
+        'p99_novelty': float(np.percentile(nn_novelty_scores, 99)),
+        'p95_novelty': float(np.percentile(nn_novelty_scores, 95)),
+        'mean_novelty': float(np.mean(nn_novelty_scores)),
+        'median_novelty': float(np.median(nn_novelty_scores)),
+        'min_novelty': float(np.min(nn_novelty_scores)),
         'nn_indices': nn_indices,
-        'nn_scores': nn_scores.tolist(),
+        'nn_scores': nn_novelty_scores.tolist(),
     }
 
 
@@ -668,14 +656,14 @@ def compute_biovil_scores(
     BioViL is specialized for medical imaging and provides better
     medical-specific text-image alignment than general CLIP.
 
-    Uses the correct hi-ml-multimodal API with ImageTextInferenceEngine.
+    Directly applies transform and model to PIL Images (bypasses file-path API).
 
     Args:
-        images: List of images as numpy arrays (RGB, 0-255)
+        images: List of images as numpy arrays (grayscale or RGB, 0-255)
         prompts: List of text prompts (one per image)
         vlp_inference: BioViL ImageTextInferenceEngine
         text_inference_unused: Unused (kept for backward compatibility)
-        device: Device for computation (unused, inference engines handle device)
+        device: Device for computation
         show_progress: Show progress bar
 
     Returns:
@@ -686,31 +674,46 @@ def compute_biovil_scores(
         return [None] * len(images)
 
     from PIL import Image as PILImage
+    import torch.nn.functional as F
 
     scores = []
-    batch_size = 16
 
-    iterator = range(0, len(images), batch_size)
+    # Get the transform and model from the inference engine
+    image_inference = vlp_inference.image_inference_engine
+    text_inference = vlp_inference.text_inference_engine
+    transform = image_inference.transform
+    model_device = next(image_inference.model.parameters()).device
+
+    iterator = range(len(images))
     if show_progress:
         iterator = tqdm(iterator, desc="Computing BioViL scores")
 
-    for i in iterator:
-        batch_images = images[i:i + batch_size]
-        batch_prompts = prompts[i:i + batch_size]
+    with torch.no_grad():
+        for i in iterator:
+            img = images[i]
+            prompt = prompts[i]
 
-        # Convert numpy arrays to PIL Images (required by BioViL)
-        pil_images = [PILImage.fromarray(img.astype(np.uint8)) for img in batch_images]
+            # Convert numpy array to PIL Image (grayscale mode 'L' as expected by BioViL)
+            if len(img.shape) == 3:
+                # RGB to grayscale
+                pil_img = PILImage.fromarray(img.astype(np.uint8)).convert('L')
+            else:
+                # Already grayscale
+                pil_img = PILImage.fromarray(img.astype(np.uint8), mode='L')
 
-        with torch.no_grad():
-            # Use ImageTextInferenceEngine API to get similarity scores
-            # Process each image-text pair (BioViL expects single image + text)
-            batch_scores = []
-            for pil_img, prompt in zip(pil_images, batch_prompts):
-                # get_similarity_score_from_raw_data returns a single scalar similarity
-                similarity = vlp_inference.get_similarity_score_from_raw_data(pil_img, prompt)
-                batch_scores.append(similarity)
+            # Apply transform and get image embedding
+            transformed_image = transform(pil_img).unsqueeze(0).to(model_device)
+            projected_img_emb = image_inference.model.forward(transformed_image).projected_global_embedding
+            projected_img_emb = F.normalize(projected_img_emb, dim=-1)[0]
 
-            scores.extend(batch_scores)
+            # Get text embedding
+            text_embedding = text_inference.get_embeddings_from_prompt([prompt], normalize=False)
+            text_embedding = text_embedding.mean(dim=0)
+            text_embedding = F.normalize(text_embedding, dim=0, p=2)
+
+            # Compute cosine similarity
+            similarity = (projected_img_emb @ text_embedding).item()
+            scores.append(similarity)
 
     return scores
 

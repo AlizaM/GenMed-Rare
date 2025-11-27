@@ -37,41 +37,41 @@ class TestSSIM:
         """Test SSIM with same-size RGB images."""
         img1 = np.random.randint(0, 256, (512, 512, 3), dtype=np.uint8)
         img2 = np.random.randint(0, 256, (512, 512, 3), dtype=np.uint8)
-        
+
         score = compute_ssim(img1, img2)
-        assert 0.0 <= score <= 1.0, "SSIM should be in [0, 1]"
-    
+        assert -1.0 <= score <= 1.0, "SSIM should be in [-1, 1]"
+
     def test_same_size_grayscale(self):
         """Test SSIM with same-size grayscale images."""
         img1 = np.random.randint(0, 256, (512, 512), dtype=np.uint8)
         img2 = np.random.randint(0, 256, (512, 512), dtype=np.uint8)
-        
+
         score = compute_ssim(img1, img2)
-        assert 0.0 <= score <= 1.0, "SSIM should be in [0, 1]"
+        assert -1.0 <= score <= 1.0, "SSIM should be in [-1, 1]"
     
     def test_different_sizes_rgb(self):
         """Test SSIM with different-size RGB images (should auto-resize)."""
         img1 = np.random.randint(0, 256, (512, 512, 3), dtype=np.uint8)
         img2 = np.random.randint(0, 256, (1024, 1024, 3), dtype=np.uint8)
-        
+
         score = compute_ssim(img1, img2)
-        assert 0.0 <= score <= 1.0, "SSIM should handle different sizes"
+        assert -1.0 <= score <= 1.0, "SSIM should handle different sizes"
     
     def test_different_sizes_grayscale(self):
         """Test SSIM with different-size grayscale images."""
         img1 = np.random.randint(0, 256, (512, 512), dtype=np.uint8)
         img2 = np.random.randint(0, 256, (1024, 1024), dtype=np.uint8)
-        
+
         score = compute_ssim(img1, img2)
-        assert 0.0 <= score <= 1.0, "SSIM should handle different sizes"
+        assert -1.0 <= score <= 1.0, "SSIM should handle different sizes"
     
     def test_mixed_rgb_grayscale(self):
         """Test SSIM with RGB vs grayscale."""
         img1_rgb = np.random.randint(0, 256, (512, 512, 3), dtype=np.uint8)
         img2_gray = np.random.randint(0, 256, (512, 512), dtype=np.uint8)
-        
+
         score = compute_ssim(img1_rgb, img2_gray)
-        assert 0.0 <= score <= 1.0, "SSIM should handle RGB vs grayscale"
+        assert -1.0 <= score <= 1.0, "SSIM should handle RGB vs grayscale"
     
     def test_identical_images(self):
         """Test SSIM with identical images (should be ~1.0)."""
@@ -84,9 +84,9 @@ class TestSSIM:
         """Test SSIM with very different sizes (e.g., 256 vs 1024)."""
         img1 = np.random.randint(0, 256, (256, 256, 3), dtype=np.uint8)
         img2 = np.random.randint(0, 256, (2048, 2048, 3), dtype=np.uint8)
-        
+
         score = compute_ssim(img1, img2)
-        assert 0.0 <= score <= 1.0, "SSIM should handle large size differences"
+        assert -1.0 <= score <= 1.0, "SSIM should handle large size differences"
 
 
 class TestCorrelation:
@@ -125,11 +125,11 @@ class TestNoveltyMetrics:
         training = [np.random.randint(0, 256, (512, 512, 3), dtype=np.uint8) for _ in range(20)]
         
         metrics = compute_novelty_metrics(generated, training, metric='ssim', show_progress=False)
-        
-        assert 'max_similarity' in metrics
-        assert 'mean_similarity' in metrics
-        assert 'p99_similarity' in metrics
-        assert 0.0 <= metrics['max_similarity'] <= 1.0
+
+        assert 'max_novelty' in metrics
+        assert 'mean_novelty' in metrics
+        assert 'p99_novelty' in metrics
+        assert 0.0 <= metrics['max_novelty'] <= 1.0
     
     def test_different_size_images(self):
         """Test novelty with different-size images (common real-world scenario)."""
@@ -138,9 +138,9 @@ class TestNoveltyMetrics:
         
         # This should not raise an error
         metrics = compute_novelty_metrics(generated, training, metric='ssim', show_progress=False)
-        
-        assert 'max_similarity' in metrics
-        assert 0.0 <= metrics['max_similarity'] <= 1.0
+
+        assert 'max_novelty' in metrics
+        assert 0.0 <= metrics['max_novelty'] <= 1.0
     
     def test_correlation_metric(self):
         """Test novelty using correlation instead of SSIM."""
@@ -148,9 +148,9 @@ class TestNoveltyMetrics:
         training = [np.random.randint(0, 256, (512, 512, 3), dtype=np.uint8) for _ in range(10)]
         
         metrics = compute_novelty_metrics(generated, training, metric='correlation', show_progress=False)
-        
-        assert 'max_similarity' in metrics
-        assert -1.0 <= metrics['max_similarity'] <= 1.0
+
+        assert 'max_novelty' in metrics
+        assert 0.0 <= metrics['max_novelty'] <= 2.0  # 1 - (-1) = 2 max possible
 
 
 class TestDiversityMetrics:
@@ -180,14 +180,14 @@ class TestDiversityMetrics:
     def test_self_similarity(self):
         """Test pairwise SSIM computation."""
         images = [np.random.randint(0, 256, (512, 512, 3), dtype=np.uint8) for _ in range(10)]
-        
+
         metrics = compute_self_similarity(images, num_samples=5, show_progress=False)
-        
+
         assert 'mean_self_ssim' in metrics
         assert 'median_self_ssim' in metrics
         assert 'std_self_ssim' in metrics
-        assert 0.0 <= metrics['mean_self_ssim'] <= 1.0
-    
+        assert -1.0 <= metrics['mean_self_ssim'] <= 1.0  # SSIM range is [-1, 1]
+
     def test_self_similarity_different_sizes(self):
         """Test self-similarity with varied image sizes."""
         images = [
@@ -195,12 +195,12 @@ class TestDiversityMetrics:
             np.random.randint(0, 256, (256, 256, 3), dtype=np.uint8),
             np.random.randint(0, 256, (1024, 1024, 3), dtype=np.uint8),
         ]
-        
+
         # Should handle different sizes without error
         metrics = compute_self_similarity(images, num_samples=2, show_progress=False)
-        
+
         assert 'mean_self_ssim' in metrics
-        assert 0.0 <= metrics['mean_self_ssim'] <= 1.0
+        assert -1.0 <= metrics['mean_self_ssim'] <= 1.0  # SSIM range is [-1, 1]
 
 
 class TestEdgeCases:
@@ -210,10 +210,10 @@ class TestEdgeCases:
         """Test novelty with single generated image."""
         generated = [np.random.randint(0, 256, (512, 512, 3), dtype=np.uint8)]
         training = [np.random.randint(0, 256, (512, 512, 3), dtype=np.uint8) for _ in range(10)]
-        
+
         metrics = compute_novelty_metrics(generated, training, metric='ssim', show_progress=False)
-        
-        assert 'max_similarity' in metrics
+
+        assert 'max_novelty' in metrics
         assert len(metrics['nn_indices']) == 1
     
     def test_very_small_images(self):
@@ -230,30 +230,30 @@ class TestEdgeCases:
         """Test handling of single-channel vs multi-channel."""
         img1 = np.random.randint(0, 256, (512, 512, 1), dtype=np.uint8)
         img2 = np.random.randint(0, 256, (512, 512, 3), dtype=np.uint8)
-        
+
         # Should handle without error
         score = compute_ssim(img1, img2)
-        assert 0.0 <= score <= 1.0
+        assert -1.0 <= score <= 1.0  # SSIM range is [-1, 1]
 
 
 class TestDataTypes:
     """Test different data types and ranges."""
-    
+
     def test_float_images(self):
         """Test with float images [0, 1]."""
         img1 = np.random.rand(512, 512, 3).astype(np.float32) * 255
         img2 = np.random.rand(512, 512, 3).astype(np.float32) * 255
-        
+
         score = compute_ssim(img1, img2)
-        assert 0.0 <= score <= 1.0
-    
+        assert -1.0 <= score <= 1.0  # SSIM range is [-1, 1]
+
     def test_uint8_images(self):
         """Test with uint8 images [0, 255]."""
         img1 = np.random.randint(0, 256, (512, 512, 3), dtype=np.uint8)
         img2 = np.random.randint(0, 256, (512, 512, 3), dtype=np.uint8)
-        
+
         score = compute_ssim(img1, img2)
-        assert 0.0 <= score <= 1.0
+        assert -1.0 <= score <= 1.0  # SSIM range is [-1, 1]
 
 
 if __name__ == "__main__":
