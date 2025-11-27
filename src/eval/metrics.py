@@ -612,7 +612,7 @@ def load_biovil_model(device: str = "cuda"):
     logger.info("Loading BioViL model (HI-ML-Multimodal)...")
     try:
         from health_multimodal.image.model.pretrained import get_biovil_image_encoder
-        from health_multimodal.text.utils import get_cxr_bert, get_bert_inference
+        from health_multimodal.text.utils import get_bert_inference, BertEncoderType
         from health_multimodal.image.inference_engine import ImageInferenceEngine
         from health_multimodal.image.data.transforms import create_chest_xray_transform_for_inference
         from health_multimodal.vlp import ImageTextInferenceEngine
@@ -620,10 +620,9 @@ def load_biovil_model(device: str = "cuda"):
         # Load the pretrained BioViL image encoder
         image_model = get_biovil_image_encoder()
 
-        # Load text model and create text inference engine with tokenizer
-        # get_bert_inference creates a TextInferenceEngine with the model and tokenizer
-        text_model = get_cxr_bert()
-        text_inference = get_bert_inference(text_model)
+        # Create text inference engine for CXR-BERT
+        # get_bert_inference() takes an enum type and loads model+tokenizer internally
+        text_inference = get_bert_inference(BertEncoderType.CXR_BERT)
 
         # Create transform for X-ray images
         transform = create_chest_xray_transform_for_inference(512, center_crop_size=448)

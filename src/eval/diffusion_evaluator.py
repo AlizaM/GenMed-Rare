@@ -447,20 +447,20 @@ class DiffusionGenerationEvaluator:
         summary = {k: v for k, v in self.results.items()}
         
         # Remove large arrays to keep file size manageable
-        if 'novelty' in summary and 'nn_scores' in summary['novelty']:
-            summary['novelty'] = {k: v for k, v in summary['novelty'].items() 
+        if 'novelty' in summary and summary['novelty'] is not None and 'nn_scores' in summary['novelty']:
+            summary['novelty'] = {k: v for k, v in summary['novelty'].items()
                                  if k not in ['nn_scores', 'nn_indices']}
-        if 'biovil' in summary and 'scores' in summary['biovil']:
-            summary['biovil'] = {k: v for k, v in summary['biovil'].items() 
+        if 'biovil' in summary and summary['biovil'] is not None and 'scores' in summary['biovil']:
+            summary['biovil'] = {k: v for k, v in summary['biovil'].items()
                                 if k != 'scores'}
-        if 'diversity' in summary and 'pathology_stds' in summary['diversity']:
-            summary['diversity'] = {k: v for k, v in summary['diversity'].items() 
+        if 'diversity' in summary and summary['diversity'] is not None and 'pathology_stds' in summary['diversity']:
+            summary['diversity'] = {k: v for k, v in summary['diversity'].items()
                                    if k != 'pathology_stds'}
-        if 'self_similarity' in summary and 'self_ssim_scores' in summary['self_similarity']:
-            summary['self_similarity'] = {k: v for k, v in summary['self_similarity'].items() 
+        if 'self_similarity' in summary and summary['self_similarity'] is not None and 'self_ssim_scores' in summary['self_similarity']:
+            summary['self_similarity'] = {k: v for k, v in summary['self_similarity'].items()
                                          if k != 'self_ssim_scores'}
-        if 'tsne' in summary:
-            summary['tsne'] = {k: v for k, v in summary['tsne'].items() 
+        if 'tsne' in summary and summary['tsne'] is not None:
+            summary['tsne'] = {k: v for k, v in summary['tsne'].items()
                               if k not in ['tsne_embeddings', 'labels']}
         
         with open(results_path, 'w') as f:
@@ -473,9 +473,9 @@ class DiffusionGenerationEvaluator:
         import matplotlib.pyplot as plt
         
         # t-SNE visualization if computed
-        if self.compute_tsne and 'tsne' in self.results:
+        if self.compute_tsne and 'tsne' in self.results and self.results['tsne'] is not None:
             logger.info("Creating t-SNE visualization...")
-            
+
             embeddings = np.array(self.results['tsne']['tsne_embeddings'])
             labels = np.array(self.results['tsne']['labels'])
             
