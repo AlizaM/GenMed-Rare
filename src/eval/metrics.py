@@ -857,28 +857,31 @@ def compute_tsne_overlap(
     device: str,
     perplexity: int = 30,
     n_iter: int = 1000,
-    show_progress: bool = True
+    show_progress: bool = True,
+    healthy_images: Optional[List[np.ndarray]] = None
 ) -> Dict[str, any]:
     """
-    Compute t-SNE overlap between generated and real images.
-    
+    Compute t-SNE overlap between generated and real images, optionally with healthy images.
+
     Measures how well generated images overlap with real images in
     a 2D t-SNE embedding of the feature space.
-    
+
     Args:
         generated_images: List of generated images as numpy arrays
-        real_images: List of real images as numpy arrays
+        real_images: List of real images as numpy arrays (pathology)
         xrv_model: TorchXRayVision model
         device: Device for computation
         perplexity: t-SNE perplexity parameter
         n_iter: Number of t-SNE iterations
         show_progress: Show progress bar
-    
+        healthy_images: Optional list of healthy images as third group
+
     Returns:
         Dictionary with:
             - tsne_embeddings: 2D coordinates (shape: [total_images, 2])
-            - labels: 0=real, 1=generated
+            - labels: 0=real pathology, 1=generated, 2=healthy (if provided)
             - overlap_score: Overlap metric (0-1, higher is better)
+            - group_counts: Number of images in each group
     """
     def extract_features(images: List[np.ndarray]) -> np.ndarray:
         """Extract features from images using TorchXRayVision."""
@@ -904,10 +907,18 @@ def compute_tsne_overlap(
     # Extract features
     gen_features = extract_features(generated_images)
     real_features = extract_features(real_images)
-    
-    # Combine features
-    all_features = np.concatenate([real_features, gen_features], axis=0)
-    labels = np.array([0] * len(real_images) + [1] * len(generated_images))
+
+    # Handle healthy images if provided
+    if healthy_images is not None and len(healthy_images) > 0:
+        if show_progress:
+            print(f"Including {len(healthy_images)} healthy images in t-SNE...")
+        healthy_features = extract_features(healthy_images)
+        all_features = np.concatenate([real_features, gen_features, healthy_features], axis=0)
+        labels = np.array([0] * len(real_images) + [1] * len(generated_images) + [2] * len(healthy_images))
+    else:
+        # Combine features (2 groups only)
+        all_features = np.concatenate([real_features, gen_features], axis=0)
+        labels = np.array([0] * len(real_images) + [1] * len(generated_images))
     
     # Compute t-SNE
     if show_progress:
@@ -936,13 +947,22 @@ def compute_tsne_overlap(
     # Use median distance as threshold
     threshold = np.median(min_distances)
     overlap_score = np.mean(min_distances <= threshold)
-    
+
+    # Build group counts dictionary
+    group_counts = {
+        'real_pathology': len(real_images),
+        'generated': len(generated_images)
+    }
+    if healthy_images is not None and len(healthy_images) > 0:
+        group_counts['healthy'] = len(healthy_images)
+
     return {
         'tsne_embeddings': embeddings.tolist(),
         'labels': labels.tolist(),
         'overlap_score': float(overlap_score),
         'mean_distance': float(np.mean(min_distances)),
         'median_distance': float(np.median(min_distances)),
+        'group_counts': group_counts,
     }
 
 

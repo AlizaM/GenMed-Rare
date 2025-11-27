@@ -14,6 +14,7 @@ from PIL import Image
 
 import torch
 
+from src.data.preprocess import crop_border_and_resize
 from src.eval.metrics import (
     # Novelty metrics
     compute_novelty_metrics,
@@ -54,6 +55,7 @@ class DiffusionGenerationEvaluator:
         label: str,
         output_dir: Path,
         device: str = "cuda",
+        healthy_images_dir: Optional[Path] = None,
         # Metric selection
         compute_novelty: bool = True,
         compute_pathology_confidence: bool = True,
@@ -71,16 +73,19 @@ class DiffusionGenerationEvaluator:
         self_similarity_samples: int = 100,
         tsne_perplexity: int = 30,
         tsne_n_iter: int = 1000,
+        # Preprocessing
+        crop_border_pixels: int = 0,  # Set to 10 to remove border artifacts
     ):
         """
         Initialize evaluator.
         
         Args:
             generated_images_dir: Directory with generated images
-            real_images_dir: Directory with real training images
+            real_images_dir: Directory with real training images (pathology)
             label: Label name (e.g., "Fibrosis")
             output_dir: Output directory for results
             device: Device for computation
+            healthy_images_dir: Optional directory with healthy images for t-SNE comparison
             
             Metric selection flags:
             compute_novelty: SSIM-based novelty vs training set
@@ -99,9 +104,11 @@ class DiffusionGenerationEvaluator:
             self_similarity_samples: Number of pairs for self-similarity
             tsne_perplexity: t-SNE perplexity parameter
             tsne_n_iter: t-SNE iterations
+            crop_border_pixels: Crop N pixels from each side and resize back (0 = no crop)
         """
         self.generated_images_dir = Path(generated_images_dir)
         self.real_images_dir = Path(real_images_dir)
+        self.healthy_images_dir = Path(healthy_images_dir) if healthy_images_dir is not None else None
         self.label = label
         self.output_dir = Path(output_dir)
         self.device = device
@@ -124,7 +131,8 @@ class DiffusionGenerationEvaluator:
         self.self_similarity_samples = self_similarity_samples
         self.tsne_perplexity = tsne_perplexity
         self.tsne_n_iter = tsne_n_iter
-        
+        self.crop_border_pixels = crop_border_pixels
+
         # Validate paths
         if not self.generated_images_dir.exists():
             raise FileNotFoundError(f"Generated images not found: {self.generated_images_dir}")
@@ -137,6 +145,7 @@ class DiffusionGenerationEvaluator:
         # Storage
         self.generated_images: List[np.ndarray] = []
         self.real_images: List[np.ndarray] = []
+        self.healthy_images: List[np.ndarray] = []
         self.results: Dict = {}
         
         # Models (loaded on demand)
@@ -166,36 +175,76 @@ class DiffusionGenerationEvaluator:
         logger.info("=" * 80)
     
     def load_images(self):
-        """Load generated and real images."""
+        """Load generated and real images with optional border cropping."""
         logger.info("Loading images...")
-        
+
+        if self.crop_border_pixels > 0:
+            logger.info(f"  Applying border crop: {self.crop_border_pixels}px from each side")
+
         # Load generated images
         logger.info(f"Loading generated images from {self.generated_images_dir}...")
         gen_files = sorted(self.generated_images_dir.glob("*.png")) + sorted(self.generated_images_dir.glob("*.jpg"))
         if len(gen_files) == 0:
             raise ValueError(f"No images found in {self.generated_images_dir}")
-        
+
         for img_path in tqdm(gen_files, desc="Loading generated"):
             img = Image.open(img_path)
-            self.generated_images.append(pil_to_numpy(img))
-        
+            img_np = pil_to_numpy(img)
+
+            # Apply border cropping if requested
+            if self.crop_border_pixels > 0:
+                img_np = crop_border_and_resize(img_np, crop_pixels=self.crop_border_pixels)
+
+            self.generated_images.append(img_np)
+
         logger.info(f"✓ Loaded {len(self.generated_images)} generated images")
-        
+
         # Load real images
         logger.info(f"Loading real images from {self.real_images_dir}...")
         real_files = sorted(self.real_images_dir.glob("*.png")) + sorted(self.real_images_dir.glob("*.jpg"))
         if len(real_files) == 0:
             raise ValueError(f"No images found in {self.real_images_dir}")
-        
+
         if self.max_real_images is not None and len(real_files) > self.max_real_images:
             logger.info(f"Limiting to {self.max_real_images} real images (out of {len(real_files)})")
             real_files = real_files[:self.max_real_images]
-        
+
         for img_path in tqdm(real_files, desc="Loading real"):
             img = Image.open(img_path)
-            self.real_images.append(pil_to_numpy(img))
-        
+            img_np = pil_to_numpy(img)
+
+            # Apply border cropping if requested
+            if self.crop_border_pixels > 0:
+                img_np = crop_border_and_resize(img_np, crop_pixels=self.crop_border_pixels)
+
+            self.real_images.append(img_np)
+
         logger.info(f"✓ Loaded {len(self.real_images)} real images")
+
+        # Load healthy images if directory provided
+        if self.healthy_images_dir is not None and self.compute_tsne:
+            logger.info(f"Loading healthy images from {self.healthy_images_dir}...")
+            healthy_files = sorted(self.healthy_images_dir.glob("*.png")) + sorted(self.healthy_images_dir.glob("*.jpg"))
+
+            if len(healthy_files) == 0:
+                logger.warning(f"No healthy images found in {self.healthy_images_dir}, skipping healthy group in t-SNE")
+            else:
+                # Optionally limit healthy images to match generated count
+                if len(healthy_files) > len(self.generated_images):
+                    logger.info(f"Limiting to {len(self.generated_images)} healthy images (out of {len(healthy_files)})")
+                    healthy_files = healthy_files[:len(self.generated_images)]
+
+                for img_path in tqdm(healthy_files, desc="Loading healthy"):
+                    img = Image.open(img_path)
+                    img_np = pil_to_numpy(img)
+
+                    # Apply border cropping if requested
+                    if self.crop_border_pixels > 0:
+                        img_np = crop_border_and_resize(img_np, crop_pixels=self.crop_border_pixels)
+
+                    self.healthy_images.append(img_np)
+
+                logger.info(f"✓ Loaded {len(self.healthy_images)} healthy images")
     
     def _ensure_xrv_model(self):
         """Load TorchXRayVision model if not already loaded."""
@@ -422,7 +471,8 @@ class DiffusionGenerationEvaluator:
                     self.device,
                     perplexity=self.tsne_perplexity,
                     n_iter=self.tsne_n_iter,
-                    show_progress=True
+                    show_progress=True,
+                    healthy_images=self.healthy_images if len(self.healthy_images) > 0 else None
                 )
                 self.results['tsne'] = tsne_results
                 logger.info(f"✓ t-SNE overlap: {tsne_results['overlap_score']:.3f}")
@@ -450,6 +500,9 @@ class DiffusionGenerationEvaluator:
         if 'novelty' in summary and summary['novelty'] is not None and 'nn_scores' in summary['novelty']:
             summary['novelty'] = {k: v for k, v in summary['novelty'].items()
                                  if k not in ['nn_scores', 'nn_indices']}
+        if 'pathology' in summary and summary['pathology'] is not None and 'confidences' in summary['pathology']:
+            summary['pathology'] = {k: v for k, v in summary['pathology'].items()
+                                   if k != 'confidences'}  # Keep only statistics, not all 2000 probabilities
         if 'biovil' in summary and summary['biovil'] is not None and 'scores' in summary['biovil']:
             summary['biovil'] = {k: v for k, v in summary['biovil'].items()
                                 if k != 'scores'}
@@ -478,8 +531,10 @@ class DiffusionGenerationEvaluator:
 
             embeddings = np.array(self.results['tsne']['tsne_embeddings'])
             labels = np.array(self.results['tsne']['labels'])
-            
+
             plt.figure(figsize=(12, 10))
+
+            # Plot real pathology images (label 0)
             plt.scatter(
                 embeddings[labels == 0, 0],
                 embeddings[labels == 0, 1],
@@ -489,6 +544,8 @@ class DiffusionGenerationEvaluator:
                 s=30,
                 edgecolors='none'
             )
+
+            # Plot generated images (label 1)
             plt.scatter(
                 embeddings[labels == 1, 0],
                 embeddings[labels == 1, 1],
@@ -498,6 +555,18 @@ class DiffusionGenerationEvaluator:
                 s=30,
                 edgecolors='none'
             )
+
+            # Plot healthy images if present (label 2)
+            if len(self.healthy_images) > 0:
+                plt.scatter(
+                    embeddings[labels == 2, 0],
+                    embeddings[labels == 2, 1],
+                    c='green',
+                    alpha=0.4,
+                    label=f'Healthy (n={len(self.healthy_images)})',
+                    s=30,
+                    edgecolors='none'
+                )
             plt.xlabel('t-SNE Dimension 1', fontsize=12)
             plt.ylabel('t-SNE Dimension 2', fontsize=12)
             
@@ -515,7 +584,61 @@ class DiffusionGenerationEvaluator:
             plt.close()
             
             logger.info(f"✓ t-SNE visualization saved to {tsne_path}")
-    
+
+        # Novelty visualization: Top 5 most similar real-generated pairs
+        if self.compute_novelty and 'novelty' in self.results and self.results['novelty'] is not None:
+            novelty_results = self.results['novelty']
+            if 'nn_indices' in novelty_results and 'nn_scores' in novelty_results:
+                logger.info("Creating novelty comparison visualization (top 5 most similar pairs)...")
+
+                nn_indices = np.array(novelty_results['nn_indices'])
+                nn_scores = np.array(novelty_results['nn_scores'])
+
+                # Get indices of 5 most similar pairs (highest scores = most similar)
+                top_k = min(5, len(nn_scores))
+                top_indices = np.argsort(nn_scores)[-top_k:][::-1]  # Descending order
+
+                # Create 2-row grid: top row = real, bottom row = generated
+                fig, axes = plt.subplots(2, top_k, figsize=(top_k * 3, 6))
+
+                for i, idx in enumerate(top_indices):
+                    gen_img = self.generated_images[idx]
+                    real_idx = nn_indices[idx]
+                    real_img = self.real_images[real_idx]
+                    similarity_score = nn_scores[idx]
+
+                    # Top row: Real images
+                    ax_real = axes[0, i] if top_k > 1 else axes[0]
+                    ax_real.imshow(real_img, cmap='gray')
+                    ax_real.axis('off')
+                    ax_real.set_title(f'Real #{real_idx}', fontsize=10, fontweight='bold')
+
+                    # Bottom row: Generated images
+                    ax_gen = axes[1, i] if top_k > 1 else axes[1]
+                    ax_gen.imshow(gen_img, cmap='gray')
+                    ax_gen.axis('off')
+                    metric_name = "SSIM" if self.novelty_metric == "ssim" else "Corr"
+                    ax_gen.set_title(f'Gen #{idx}\n{metric_name}={similarity_score:.3f}',
+                                    fontsize=10, fontweight='bold')
+
+                # Add row labels
+                fig.text(0.02, 0.75, 'Real Images', va='center', rotation='vertical',
+                        fontsize=12, fontweight='bold')
+                fig.text(0.02, 0.25, 'Generated Images', va='center', rotation='vertical',
+                        fontsize=12, fontweight='bold')
+
+                metric_full_name = "SSIM" if self.novelty_metric == "ssim" else "Correlation"
+                plt.suptitle(f'Top {top_k} Most Similar Real-Generated Pairs ({self.label})\n'
+                           f'Metric: {metric_full_name}',
+                           fontsize=14, fontweight='bold')
+                plt.tight_layout(rect=[0.03, 0.03, 0.97, 0.95])
+
+                novelty_path = self.output_dir / f'{self.label}_top_similar_pairs.png'
+                plt.savefig(novelty_path, dpi=300, bbox_inches='tight')
+                plt.close()
+
+                logger.info(f"✓ Novelty comparison saved to {novelty_path}")
+
     def print_summary(self):
         """Print evaluation summary."""
         logger.info("=" * 80)

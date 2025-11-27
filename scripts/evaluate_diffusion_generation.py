@@ -232,7 +232,19 @@ Available metrics:
         default=1000,
         help="t-SNE number of iterations"
     )
-    
+    parser.add_argument(
+        "--crop-border-pixels",
+        type=int,
+        default=0,
+        help="Crop N pixels from each side and resize back (default: 0 = no crop)"
+    )
+    parser.add_argument(
+        "--healthy-images-dir",
+        type=str,
+        default=None,
+        help="Optional directory with healthy images for t-SNE comparison"
+    )
+
     return parser.parse_args()
 
 
@@ -266,6 +278,7 @@ def main():
         label=args.label,
         output_dir=output_dir,
         device=args.device,
+        healthy_images_dir=args.healthy_images_dir,
         # Metric selection
         **metric_config,
         # Parameters
@@ -274,6 +287,7 @@ def main():
         self_similarity_samples=args.self_similarity_samples,
         tsne_perplexity=args.tsne_perplexity,
         tsne_n_iter=args.tsne_n_iter,
+        crop_border_pixels=args.crop_border_pixels,
     )
     
     # Run evaluation

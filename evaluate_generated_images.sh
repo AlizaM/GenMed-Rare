@@ -60,6 +60,7 @@ FIBROSIS_GENERATED="/w/20251/alizat/generated_xrays/Fibrosis_2000_images_2025112
 FIBROSIS_REAL="${PROJECT_DIR}/data/pure_class_folders/fibrosis"
 PNEUMONIA_GENERATED="/w/20251/alizat/generated_xrays/Pneumonia_2000_images_20251126_004836"
 PNEUMONIA_REAL="${PROJECT_DIR}/data/pure_class_folders/pneumonia"
+HEALTHY="${PROJECT_DIR}/data/pure_class_folders/healthy"
 
 OUTPUT_BASE="/w/20251/alizat/outputs/evaluation_$(date +%Y%m%d_%H%M%S)"
 
@@ -108,7 +109,9 @@ python scripts/evaluate_diffusion_generation.py \
     --label Fibrosis \
     --output-dir "${FIBROSIS_OUTPUT}" \
     --preset "${PRESET}" \
-    --prompt-template "A chest X-ray showing {label}"
+    --prompt-template "A chest X-ray showing {label}" \
+    --crop-border-pixels 10 \
+    --healthy-images-dir "${HEALTHY}"
 
 FIBROSIS_EXIT=$?
 
@@ -139,7 +142,9 @@ python scripts/evaluate_diffusion_generation.py \
     --label Pneumonia \
     --output-dir "${PNEUMONIA_OUTPUT}" \
     --preset "${PRESET}" \
-    --prompt-template "A chest X-ray showing {label}"
+    --prompt-template "A chest X-ray showing {label}" \
+    --crop-border-pixels 10 \
+    --healthy-images-dir "${HEALTHY}"
 
 PNEUMONIA_EXIT=$?
 

@@ -323,6 +323,65 @@ def preprocess_data(config_path: str):
     logger.info("=" * 80)
 
 
+def crop_border_and_resize(image: np.ndarray, crop_pixels: int = 10, target_size: int = 512) -> np.ndarray:
+    """
+    Crop border pixels from all sides and resize back to target size.
+
+    This removes artifacts (e.g., white borders) from generated images while maintaining
+    a consistent zoom level across real and generated images.
+
+    Args:
+        image: Input image as numpy array (H, W, C) or (H, W), dtype=uint8 in range [0, 255]
+        crop_pixels: Number of pixels to crop from each side (default: 10)
+        target_size: Target size for output image (default: 512 for 512×512)
+
+    Returns:
+        Cropped and resized image as numpy array, dtype=uint8 in range [0, 255]
+
+    Example:
+        # Remove white borders from generated images
+        >>> from PIL import Image
+        >>> img = np.array(Image.open('generated_image.png'))  # 512×512×3
+        >>> img_clean = crop_border_and_resize(img, crop_pixels=10, target_size=512)
+        >>> img_clean.shape  # Still 512×512×3, but with borders removed
+
+    Note:
+        This function maintains the original value range [0, 255] and dtype (uint8).
+        No normalization is applied - use this before evaluation metrics.
+    """
+    from PIL import Image
+
+    # Validate input
+    if image.dtype != np.uint8:
+        raise ValueError(f"Expected uint8 image, got {image.dtype}")
+
+    # Convert to PIL for easy cropping and resizing
+    pil_img = Image.fromarray(image)
+
+    # Get original dimensions
+    width, height = pil_img.size
+
+    # Crop from all sides
+    # Box format: (left, upper, right, lower)
+    crop_box = (
+        crop_pixels,           # left
+        crop_pixels,           # upper
+        width - crop_pixels,   # right
+        height - crop_pixels   # lower
+    )
+
+    cropped_img = pil_img.crop(crop_box)
+
+    # Resize back to target size
+    # Use LANCZOS for high-quality downsampling (medical images need quality preservation)
+    resized_img = cropped_img.resize((target_size, target_size), Image.LANCZOS)
+
+    # Convert back to numpy array
+    result = np.array(resized_img)
+
+    return result
+
+
 if __name__ == '__main__':
     import argparse
     
