@@ -474,22 +474,43 @@ def preprocess_for_torchxrayvision(images: List[np.ndarray]) -> torch.Tensor:
     - Pixel values normalized to [-1024, 1024] range (simulating HU units)
 
     Args:
-        images: List of RGB numpy arrays (H, W, 3) in [0, 255]
+        images: List of numpy arrays - either grayscale (H, W) or RGB (H, W, 3) in [0, 255]
 
     Returns:
         Batch tensor ready for TorchXRayVision
     """
+    from PIL import Image as PILImage
     import torchvision.transforms as transforms
 
-    # Convert to grayscale and resize
-    transform = transforms.Compose([
-        transforms.ToPILImage(),
-        transforms.Grayscale(num_output_channels=1),
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),  # Converts to [0, 1]
-    ])
+    processed = []
+    for img in images:
+        # Ensure uint8 dtype
+        if img.dtype != np.uint8:
+            if img.max() <= 1.0:
+                img = (img * 255).astype(np.uint8)
+            else:
+                img = img.astype(np.uint8)
 
-    processed = [transform(img) for img in images]
+        # Convert to PIL Image
+        if len(img.shape) == 2:
+            # Grayscale (H, W)
+            pil_img = PILImage.fromarray(img, mode='L')
+        elif len(img.shape) == 3 and img.shape[2] == 3:
+            # RGB (H, W, 3)
+            pil_img = PILImage.fromarray(img, mode='RGB').convert('L')
+        elif len(img.shape) == 3 and img.shape[2] == 1:
+            # Single channel (H, W, 1)
+            pil_img = PILImage.fromarray(img.squeeze(-1), mode='L')
+        else:
+            raise ValueError(f"Unexpected image shape: {img.shape}")
+
+        # Resize to 224x224
+        pil_img = pil_img.resize((224, 224), PILImage.BILINEAR)
+
+        # Convert to tensor [0, 1]
+        img_tensor = transforms.ToTensor()(pil_img)  # Shape: (1, 224, 224)
+        processed.append(img_tensor)
+
     batch = torch.stack(processed)
 
     # Normalize to TorchXRayVision's expected range
@@ -584,6 +605,62 @@ def compute_pathology_confidence(
     }
 
 
+def compute_pathology_biovil_correlation(
+    pathology_scores: List[float],
+    biovil_scores: List[float]
+) -> Dict[str, any]:
+    """
+    Compute correlation between pathology confidence and BioViL scores.
+
+    This measures how well the two metrics agree on image quality:
+    - High correlation: Both metrics capture similar aspects of medical accuracy
+    - Low correlation: Metrics capture different aspects (both may be useful)
+
+    Args:
+        pathology_scores: Per-image pathology confidence scores
+        biovil_scores: Per-image BioViL similarity scores
+
+    Returns:
+        Dictionary with correlation statistics
+    """
+    from scipy import stats
+
+    # Filter out None values (must be present in both)
+    valid_pairs = []
+    for p, b in zip(pathology_scores, biovil_scores):
+        if p is not None and b is not None:
+            valid_pairs.append((p, b))
+
+    if len(valid_pairs) < 3:
+        logger.warning("Not enough valid pairs to compute correlation")
+        return {
+            'pearson_r': None,
+            'pearson_p': None,
+            'spearman_r': None,
+            'spearman_p': None,
+            'num_valid_pairs': len(valid_pairs),
+        }
+
+    pathology_arr = np.array([p for p, _ in valid_pairs])
+    biovil_arr = np.array([b for _, b in valid_pairs])
+
+    # Pearson correlation (linear relationship)
+    pearson_r, pearson_p = stats.pearsonr(pathology_arr, biovil_arr)
+
+    # Spearman correlation (monotonic relationship, more robust)
+    spearman_r, spearman_p = stats.spearmanr(pathology_arr, biovil_arr)
+
+    return {
+        'pearson_r': float(pearson_r),
+        'pearson_p': float(pearson_p),
+        'spearman_r': float(spearman_r),
+        'spearman_p': float(spearman_p),
+        'num_valid_pairs': len(valid_pairs),
+        'pathology_scores': pathology_arr.tolist(),
+        'biovil_scores': biovil_arr.tolist(),
+    }
+
+
 def load_biovil_model(device: str = "cuda"):
     """
     Load BioViL (BiomedVLP-CXR-BERT) model for medical image-text alignment.
@@ -624,11 +701,21 @@ def load_biovil_model(device: str = "cuda"):
             text_inference_engine=text_inference
         )
 
-        # Move to device
-        vlp_inference.to(device)
+        # Move to device with CUDA fallback
+        actual_device = device
+        try:
+            vlp_inference.to(device)
+        except Exception as cuda_error:
+            if "cuda" in device.lower():
+                logger.warning(f"CUDA error loading BioViL: {cuda_error}")
+                logger.warning("Falling back to CPU for BioViL model...")
+                actual_device = "cpu"
+                vlp_inference.to("cpu")
+            else:
+                raise
 
-        logger.info("✓ BioViL model loaded successfully")
-        return vlp_inference, None  # Return vlp_inference in first position for compatibility
+        logger.info(f"✓ BioViL model loaded successfully on {actual_device}")
+        return vlp_inference, actual_device  # Return actual device used
     except ImportError as e:
         logger.error(
             f"BioViL requires hi-ml-multimodal library. "

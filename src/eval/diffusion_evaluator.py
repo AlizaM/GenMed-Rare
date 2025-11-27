@@ -24,6 +24,7 @@ from src.eval.metrics import (
     load_biovil_model,
     compute_biovil_scores,
     compute_score_metrics,
+    compute_pathology_biovil_correlation,
     # Diversity metrics
     compute_diversity_metrics,
     compute_intra_class_variance,
@@ -68,7 +69,7 @@ class DiffusionGenerationEvaluator:
         compute_tsne: bool = False,
         # Parameters
         prompt_template: str = "A chest X-ray showing {label}",
-        novelty_metric: str = "correlation",
+        novelty_metric: str = "ssim",
         max_real_images: Optional[int] = None,
         self_similarity_samples: int = 100,
         tsne_perplexity: int = 30,
@@ -151,7 +152,7 @@ class DiffusionGenerationEvaluator:
         # Models (loaded on demand)
         self.xrv_model = None
         self.biovil_image_inference = None
-        self.biovil_text_inference = None
+        self.biovil_device = None  # Actual device used for BioViL (may fallback to CPU)
         
         logger.info("=" * 80)
         logger.info("DiffusionGenerationEvaluator initialized")
@@ -260,9 +261,9 @@ class DiffusionGenerationEvaluator:
         """Load BioViL model if not already loaded."""
         if self.biovil_image_inference is None:
             logger.info("Loading BioViL model...")
-            self.biovil_image_inference, self.biovil_text_inference = load_biovil_model(self.device)
+            self.biovil_image_inference, self.biovil_device = load_biovil_model(self.device)
             if self.biovil_image_inference is not None:
-                logger.info("✓ BioViL model loaded")
+                logger.info(f"✓ BioViL model loaded on {self.biovil_device}")
     
     def evaluate(self) -> Dict:
         """
@@ -340,12 +341,14 @@ class DiffusionGenerationEvaluator:
                 logger.info("=" * 80)
                 prompt = self.prompt_template.format(label=self.label)
                 prompts = [prompt] * len(self.generated_images)
+                # Use biovil_device if available (may fallback to CPU)
+                biovil_device = getattr(self, 'biovil_device', None) or self.device
                 biovil_scores = compute_biovil_scores(
                     self.generated_images,
                     prompts,
                     self.biovil_image_inference,
-                    self.biovil_text_inference,
-                    self.device,
+                    None,  # text_inference unused
+                    biovil_device,
                     show_progress=True
                 )
                 biovil_metrics = compute_score_metrics(biovil_scores)
@@ -358,7 +361,29 @@ class DiffusionGenerationEvaluator:
             except Exception as e:
                 logger.error(f"✗ BioViL metric failed: {e}")
                 self.results['biovil'] = None
-        
+
+        # 3b. Pathology-BioViL Correlation (if both computed)
+        if (self.results.get('pathology') is not None and
+            self.results.get('biovil') is not None and
+            'confidences' in self.results['pathology'] and
+            'scores' in self.results['biovil']):
+            try:
+                logger.info("=" * 80)
+                logger.info("Computing Pathology-BioViL Correlation")
+                logger.info("=" * 80)
+                correlation = compute_pathology_biovil_correlation(
+                    self.results['pathology']['confidences'],
+                    self.results['biovil']['scores']
+                )
+                self.results['pathology_biovil_correlation'] = correlation
+                if correlation['pearson_r'] is not None:
+                    logger.info(f"✓ Pearson r: {correlation['pearson_r']:.3f} (p={correlation['pearson_p']:.2e})")
+                    logger.info(f"✓ Spearman r: {correlation['spearman_r']:.3f} (p={correlation['spearman_p']:.2e})")
+                    logger.info(f"✓ Valid pairs: {correlation['num_valid_pairs']}")
+            except Exception as e:
+                logger.error(f"✗ Pathology-BioViL correlation failed: {e}")
+                self.results['pathology_biovil_correlation'] = None
+
         # 4. Diversity (XRV std dev)
         logger.info(f"DEBUG: compute_diversity = {self.compute_diversity}")
         if self.compute_diversity:
@@ -621,11 +646,14 @@ class DiffusionGenerationEvaluator:
                 logger.info("Creating novelty comparison visualization (top 5 most similar pairs)...")
 
                 nn_indices = np.array(novelty_results['nn_indices'])
-                nn_scores = np.array(novelty_results['nn_scores'])
+                nn_novelty_scores = np.array(novelty_results['nn_scores'])  # These are NOVELTY scores (1 - similarity)
 
-                # Get indices of 5 most similar pairs (highest scores = most similar)
-                top_k = min(5, len(nn_scores))
-                top_indices = np.argsort(nn_scores)[-top_k:][::-1]  # Descending order
+                # Convert novelty back to similarity for display (similarity = 1 - novelty)
+                nn_similarity_scores = 1.0 - nn_novelty_scores
+
+                # Get indices of 5 most similar pairs (LOWEST novelty = highest similarity)
+                top_k = min(5, len(nn_novelty_scores))
+                top_indices = np.argsort(nn_novelty_scores)[:top_k]  # Ascending order (lowest novelty first)
 
                 # Create 2-row grid: top row = real, bottom row = generated
                 fig, axes = plt.subplots(2, top_k, figsize=(top_k * 3, 6))
@@ -634,7 +662,7 @@ class DiffusionGenerationEvaluator:
                     gen_img = self.generated_images[idx]
                     real_idx = nn_indices[idx]
                     real_img = self.real_images[real_idx]
-                    similarity_score = nn_scores[idx]
+                    similarity_score = nn_similarity_scores[idx]  # Display similarity, not novelty
 
                     # Top row: Real images
                     ax_real = axes[0, i] if top_k > 1 else axes[0]
@@ -658,7 +686,7 @@ class DiffusionGenerationEvaluator:
 
                 metric_full_name = "SSIM" if self.novelty_metric == "ssim" else "Correlation"
                 plt.suptitle(f'Top {top_k} Most Similar Real-Generated Pairs ({self.label})\n'
-                           f'Metric: {metric_full_name}',
+                           f'Metric: {metric_full_name} (higher = more similar)',
                            fontsize=14, fontweight='bold')
                 plt.tight_layout(rect=[0.03, 0.03, 0.97, 0.95])
 
@@ -667,6 +695,54 @@ class DiffusionGenerationEvaluator:
                 plt.close()
 
                 logger.info(f"✓ Novelty comparison saved to {novelty_path}")
+
+        # Pathology-BioViL correlation scatter plot
+        if ('pathology_biovil_correlation' in self.results and
+            self.results['pathology_biovil_correlation'] is not None and
+            self.results['pathology_biovil_correlation'].get('pearson_r') is not None):
+            logger.info("Creating Pathology-BioViL correlation scatter plot...")
+
+            corr = self.results['pathology_biovil_correlation']
+            pathology_scores = np.array(corr['pathology_scores'])
+            biovil_scores = np.array(corr['biovil_scores'])
+
+            fig, ax = plt.subplots(figsize=(10, 8))
+
+            # Scatter plot with color based on density
+            scatter = ax.scatter(
+                pathology_scores,
+                biovil_scores,
+                c='steelblue',
+                alpha=0.5,
+                s=20,
+                edgecolors='none'
+            )
+
+            # Add regression line
+            z = np.polyfit(pathology_scores, biovil_scores, 1)
+            p = np.poly1d(z)
+            x_line = np.linspace(pathology_scores.min(), pathology_scores.max(), 100)
+            ax.plot(x_line, p(x_line), 'r-', linewidth=2, label='Linear fit')
+
+            ax.set_xlabel('Pathology Confidence (TorchXRayVision)', fontsize=12)
+            ax.set_ylabel('BioViL Score (Text-Image Alignment)', fontsize=12)
+
+            title = (f'Pathology vs BioViL Scores - {self.label}\n'
+                    f'Pearson r={corr["pearson_r"]:.3f} (p={corr["pearson_p"]:.2e}) | '
+                    f'Spearman r={corr["spearman_r"]:.3f} (p={corr["spearman_p"]:.2e})\n'
+                    f'n={corr["num_valid_pairs"]} images')
+            ax.set_title(title, fontsize=12, fontweight='bold')
+
+            ax.legend(fontsize=10)
+            ax.grid(alpha=0.3)
+
+            plt.tight_layout()
+
+            scatter_path = self.output_dir / f'{self.label}_pathology_biovil_scatter.png'
+            plt.savefig(scatter_path, dpi=300, bbox_inches='tight')
+            plt.close()
+
+            logger.info(f"✓ Pathology-BioViL scatter plot saved to {scatter_path}")
 
     def print_summary(self):
         """Print evaluation summary."""
@@ -693,6 +769,13 @@ class DiffusionGenerationEvaluator:
             if self.results['biovil'].get('mean_score') is not None:
                 logger.info("BioViL:")
                 logger.info(f"  Mean: {self.results['biovil']['mean_score']:.3f} (higher = better)")
+
+        if ('pathology_biovil_correlation' in self.results and
+            self.results['pathology_biovil_correlation'] is not None and
+            self.results['pathology_biovil_correlation'].get('spearman_r') is not None):
+            corr = self.results['pathology_biovil_correlation']
+            logger.info("Pathology-BioViL Correlation:")
+            logger.info(f"  Spearman r: {corr['spearman_r']:.3f} (p={corr['spearman_p']:.2e})")
 
         if 'diversity' in self.results and self.results['diversity'] is not None:
             logger.info("Diversity:")

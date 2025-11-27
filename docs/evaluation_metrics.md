@@ -6,21 +6,39 @@ Comprehensive metrics for assessing diffusion model quality on chest X-ray gener
 
 Computed individually for each checkpoint to enable direct comparison.
 
-### 1. Novelty (Pixel Correlation)
+### 1. Novelty (SSIM-based)
 
-Measures generated image novelty by computing pixel-wise Pearson correlation to the nearest training sample.
+Measures how different generated images are from training images using Structural Similarity Index (SSIM).
 
-**Implementation**: For each generated image, compute pixel correlation against all training images. Report nearest-neighbor statistics.
+**Definition**: `Novelty = 1 - SSIM_similarity`
+
+For each generated image, we find the most similar training image (nearest neighbor by SSIM) and report the novelty score. Higher novelty means the generated image is more different from any training image.
+
+**Implementation**:
+1. For each generated image, compute SSIM against all training images
+2. Find the maximum SSIM (most similar training image)
+3. Convert to novelty: `novelty = 1 - max_ssim`
+4. Report statistics across all generated images
 
 **Key Statistics**:
-- `max_similarity`: Maximum correlation (identifies potential memorization)
-- `p99_similarity`: 99th percentile (robust outlier detection)
-- `mean_similarity`, `median_similarity`: Central tendency measures
+- `min_novelty`: Minimum novelty (closest to training set - potential memorization)
+- `p99_novelty`: 99th percentile novelty
+- `mean_novelty`, `median_novelty`: Central tendency measures
+- `max_novelty`: Maximum novelty (most different from training)
 
-**Thresholds**:
-- Correlation > 0.9: Potential training set memorization
-- Correlation 0.7-0.9: High similarity, minimal novelty
-- Correlation < 0.7: Novel generation
+**Interpretation** (novelty score range 0-2, typically 0-1):
+
+| Novelty Score | SSIM Equivalent | Interpretation |
+|---------------|-----------------|----------------|
+| < 0.1 | SSIM > 0.9 | ⚠️ Potential memorization - nearly identical to training |
+| 0.1 - 0.3 | SSIM 0.7-0.9 | Low novelty - very similar to training images |
+| 0.3 - 0.5 | SSIM 0.5-0.7 | Moderate novelty - recognizable similarity |
+| 0.5 - 0.7 | SSIM 0.3-0.5 | Good novelty - noticeably different |
+| > 0.7 | SSIM < 0.3 | High novelty - substantially different from training |
+
+**Visualization**: The evaluator outputs `{label}_top_similar_pairs.png` showing the 5 generated images most similar to training (lowest novelty), paired with their nearest training neighbors. This helps identify potential memorization cases.
+
+**Note**: For medical X-rays, moderate novelty (0.3-0.5) is often desirable - too low suggests memorization, too high might indicate unrealistic images.
 
 ---
 
@@ -55,8 +73,38 @@ Medical-domain text-image alignment using Microsoft BiomedVLP-CXR-BERT-specializ
 **Key Statistics**:
 - `mean_score`: Average alignment score
 - `median_score`: Median alignment score
+- `std_score`: Score distribution spread
 
-**Note**: BioViL is trained on medical terminology and radiology-specific concepts, providing more accurate semantic alignment than general-domain models for chest X-ray evaluation.
+**Interpretation** (cosine similarity range -1 to 1):
+
+| BioViL Score | Interpretation |
+|--------------|----------------|
+| > 0.5 | Strong alignment - image matches text well |
+| 0.2 - 0.5 | Moderate alignment - recognizable correspondence |
+| 0.0 - 0.2 | Weak alignment - limited correspondence |
+| < 0.0 | Negative alignment - image does not match prompt |
+
+**Important Notes**:
+- Scores vary significantly by pathology due to how BioViL was trained
+- **Compare within the same pathology**, not across different pathologies
+- Pneumonia typically scores higher than Fibrosis because "Pneumonia" appears more frequently in radiology reports
+- Some pathologies may have negative scores even for real images
+
+**Context for Medical Images**:
+- BioViL was trained on MIMIC-CXR with ~200k chest X-rays and radiology reports
+- Score magnitude depends on how the pathology term was used in training data
+- Higher scores within a pathology indicate better text-image alignment
+- Use relative comparisons across checkpoints, not absolute thresholds
+
+**Comparison to CLIP**:
+- BioViL understands medical terminology (e.g., "consolidation", "infiltrate", "fibrosis")
+- General CLIP models often fail on medical-specific concepts
+- BioViL scores vary more by pathology than CLIP due to domain-specific training
+
+**Use Cases**:
+- Verify generated images match the conditioning prompt
+- Compare different checkpoints for semantic accuracy
+- Detect mode collapse where images don't match target pathology
 
 ---
 
