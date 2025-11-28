@@ -16,8 +16,16 @@
 # 1. Effusion vs Fibrosis (with augmented Fibrosis images)
 # 2. Effusion vs Pneumonia (with augmented Pneumonia images)
 #
-# Strategy: Copy entire project + data to scratch, maintaining relative paths.
-# This ensures all CSV paths resolve correctly.
+# Data layout:
+#   /u/alizat/cv_project/GenMed-Rare/  <- CODE only (home)
+#   /w/20251/alizat/data/              <- ALL DATA (interim, processed, augmented)
+#
+# Strategy:
+#   1. Find scratch space dynamically
+#   2. Copy DATA from /w/ to scratch ONCE (reuse if exists)
+#   3. Copy CODE from home to scratch EVERY TIME (fresh copy)
+#   4. Symlink data folder so relative paths work
+#   5. Run training, output to /w/
 # ============================================================================
 
 set -e  # Exit on any error
@@ -32,20 +40,9 @@ PROJECT_DIR="$USER_HOME_BASE/cv_project/$PROJECT_NAME"
 # Track venv location on scratch
 VENV_LOCATION_FILE="$PROJECT_DIR/.scratch_venv_location"
 
-# HDD storage base (for persistent outputs)
+# HDD storage base (where data lives + outputs go)
 W_STORAGE_BASE="/w/20251/alizat"
-
-# Scratch space for fast I/O
-SCRATCH_BASE="/scratch/ssd004/scratch/alizat"
-
-# Job-specific directories
-JOB_ID="${SLURM_JOB_ID:-local}"
-SCRATCH_PROJECT_DIR="$SCRATCH_BASE/classifier_training_${JOB_ID}/$PROJECT_NAME"
-OUTPUT_DIR="$W_STORAGE_BASE/classifier_outputs/augmented_training_${JOB_ID}"
-
-# Source augmented data paths (on /w/)
-FIBROSIS_AUGMENTED_SRC="$W_STORAGE_BASE/data/augmented_data/fibrosis"
-PNEUMONIA_AUGMENTED_SRC="$W_STORAGE_BASE/data/augmented_data/pneumonia"
+W_DATA_DIR="$W_STORAGE_BASE/data"
 
 # Config files (relative to project)
 FIBROSIS_CONFIG="configs/config_augmented_fibrosis.yaml"
@@ -53,6 +50,12 @@ PNEUMONIA_CONFIG="configs/config_augmented_pneumonia.yaml"
 
 # Training script (relative to project)
 TRAINING_SCRIPT="scripts/train_classifier.py"
+
+# Job ID for unique directories
+JOB_ID="${SLURM_JOB_ID:-local}"
+
+# Output directory (persistent on /w/)
+OUTPUT_DIR="$W_STORAGE_BASE/classifier_outputs/augmented_training_${JOB_ID}"
 
 # ============================================================================
 # PRE-FLIGHT CHECKS
@@ -89,18 +92,28 @@ if [ ! -f "$PROJECT_DIR/$PNEUMONIA_CONFIG" ]; then
 fi
 echo "✓ Config files verified"
 
-# Check augmented data directories on /w/
-if [ ! -d "$FIBROSIS_AUGMENTED_SRC" ]; then
-    echo "ERROR: Fibrosis augmented data not found: $FIBROSIS_AUGMENTED_SRC"
-    echo "Please run create_augmented_dataset.py first"
+# Check data directories on /w/
+if [ ! -d "$W_DATA_DIR/interim" ]; then
+    echo "ERROR: Interim data not found: $W_DATA_DIR/interim"
     exit 1
 fi
-if [ ! -d "$PNEUMONIA_AUGMENTED_SRC" ]; then
-    echo "ERROR: Pneumonia augmented data not found: $PNEUMONIA_AUGMENTED_SRC"
-    echo "Please run create_augmented_dataset.py first"
+echo "✓ Interim data verified on /w/"
+
+if [ ! -d "$W_DATA_DIR/processed" ]; then
+    echo "ERROR: Processed data not found: $W_DATA_DIR/processed"
     exit 1
 fi
-echo "✓ Augmented data directories verified"
+echo "✓ Processed data verified on /w/"
+
+if [ ! -d "$W_DATA_DIR/augmented_data/fibrosis" ]; then
+    echo "ERROR: Fibrosis augmented data not found: $W_DATA_DIR/augmented_data/fibrosis"
+    exit 1
+fi
+if [ ! -d "$W_DATA_DIR/augmented_data/pneumonia" ]; then
+    echo "ERROR: Pneumonia augmented data not found: $W_DATA_DIR/augmented_data/pneumonia"
+    exit 1
+fi
+echo "✓ Augmented data verified on /w/"
 echo ""
 
 # ============================================================================
@@ -111,58 +124,78 @@ nvidia-smi --query-gpu=gpu_name,memory.total,driver_version --format=csv,noheade
 echo ""
 
 # ============================================================================
-# COPY PROJECT TO SCRATCH
+# FIND SCRATCH SPACE
 # ============================================================================
-echo "==> Copying project to scratch for fast I/O..."
+echo "==> Finding scratch space..."
+SCRATCH_BASE="/scratch/scratch-space"
+LATEST_SCRATCH_DIR=$(ls -td $SCRATCH_BASE/expires-* 2>/dev/null | head -1)
 
-# Create scratch directory
-mkdir -p "$SCRATCH_PROJECT_DIR"
+if [ -z "$LATEST_SCRATCH_DIR" ]; then
+    echo "ERROR: No scratch directory found in $SCRATCH_BASE"
+    exit 1
+fi
 
-# Copy project code (excluding large files and caches)
-echo "  Copying project code..."
-rsync -a --exclude='.git' \
-         --exclude='__pycache__' \
-         --exclude='*.pyc' \
-         --exclude='.venv' \
-         --exclude='outputs' \
-         --exclude='*.pth' \
-         --exclude='*.pt' \
-         "$PROJECT_DIR/" "$SCRATCH_PROJECT_DIR/"
-echo "    ✓ Project code copied"
+echo "    Found scratch: $LATEST_SCRATCH_DIR"
 
-# Copy interim data (real images)
-echo "  Copying interim data (real images)..."
-if [ -d "$PROJECT_DIR/data/interim" ]; then
-    mkdir -p "$SCRATCH_PROJECT_DIR/data"
-    cp -r "$PROJECT_DIR/data/interim" "$SCRATCH_PROJECT_DIR/data/"
-    INTERIM_COUNT=$(find "$SCRATCH_PROJECT_DIR/data/interim" -name "*.png" 2>/dev/null | wc -l)
-    echo "    ✓ $INTERIM_COUNT interim images copied"
+# Scratch directory for data only
+SCRATCH_DATA_DIR="$LATEST_SCRATCH_DIR/classifier_data"
+
+# ============================================================================
+# COPY DATA TO SCRATCH (ONCE - reuse if exists)
+# ============================================================================
+echo "==> Setting up data on scratch..."
+
+if [ -d "$SCRATCH_DATA_DIR/interim" ] && [ -d "$SCRATCH_DATA_DIR/processed" ] && [ -d "$SCRATCH_DATA_DIR/augmented_data" ]; then
+    echo "    ✓ Data already exists on scratch, reusing..."
+    INTERIM_COUNT=$(find "$SCRATCH_DATA_DIR/interim" -name "*.png" 2>/dev/null | wc -l)
+    echo "      Interim: $INTERIM_COUNT images"
 else
-    echo "    WARNING: No interim data found at $PROJECT_DIR/data/interim"
+    echo "    Copying data from /w/ to scratch (first time)..."
+    mkdir -p "$SCRATCH_DATA_DIR"
+
+    # Copy interim data
+    echo "      Copying interim data..."
+    cp -r "$W_DATA_DIR/interim" "$SCRATCH_DATA_DIR/"
+    INTERIM_COUNT=$(find "$SCRATCH_DATA_DIR/interim" -name "*.png" 2>/dev/null | wc -l)
+    echo "        ✓ $INTERIM_COUNT interim images"
+
+    # Copy processed data
+    echo "      Copying processed data..."
+    cp -r "$W_DATA_DIR/processed" "$SCRATCH_DATA_DIR/"
+    echo "        ✓ Processed CSVs copied"
+
+    # Copy augmented data
+    echo "      Copying augmented data..."
+    cp -r "$W_DATA_DIR/augmented_data" "$SCRATCH_DATA_DIR/"
+    FIB_COUNT=$(find "$SCRATCH_DATA_DIR/augmented_data/fibrosis" -name "*.png" 2>/dev/null | wc -l)
+    PNEU_COUNT=$(find "$SCRATCH_DATA_DIR/augmented_data/pneumonia" -name "*.png" 2>/dev/null | wc -l)
+    echo "        ✓ $FIB_COUNT Fibrosis + $PNEU_COUNT Pneumonia images"
+fi
+echo ""
+
+# ============================================================================
+# SYMLINK DATA IN HOME PROJECT (run code from home, data from scratch)
+# ============================================================================
+echo "==> Setting up data symlink in home project..."
+
+# Backup existing data folder if it's a real directory (not a symlink)
+if [ -d "$PROJECT_DIR/data" ] && [ ! -L "$PROJECT_DIR/data" ]; then
+    echo "    WARNING: $PROJECT_DIR/data is a real directory, backing up..."
+    mv "$PROJECT_DIR/data" "$PROJECT_DIR/data_backup_${JOB_ID}"
 fi
 
-# Copy processed data (for val/test splits)
-echo "  Copying processed data (val/test CSVs)..."
-if [ -d "$PROJECT_DIR/data/processed" ]; then
-    cp -r "$PROJECT_DIR/data/processed" "$SCRATCH_PROJECT_DIR/data/"
-    echo "    ✓ Processed data copied"
+# Remove existing symlink if present
+if [ -L "$PROJECT_DIR/data" ]; then
+    rm "$PROJECT_DIR/data"
 fi
 
-# Copy augmented data from /w/ to scratch data folder
-echo "  Copying augmented Fibrosis data..."
-mkdir -p "$SCRATCH_PROJECT_DIR/data/augmented_data"
-cp -r "$FIBROSIS_AUGMENTED_SRC" "$SCRATCH_PROJECT_DIR/data/augmented_data/"
-FIB_IMG_COUNT=$(find "$SCRATCH_PROJECT_DIR/data/augmented_data/fibrosis" -name "*.png" 2>/dev/null | wc -l)
-echo "    ✓ $FIB_IMG_COUNT Fibrosis images copied"
-
-echo "  Copying augmented Pneumonia data..."
-cp -r "$PNEUMONIA_AUGMENTED_SRC" "$SCRATCH_PROJECT_DIR/data/augmented_data/"
-PNEU_IMG_COUNT=$(find "$SCRATCH_PROJECT_DIR/data/augmented_data/pneumonia" -name "*.png" 2>/dev/null | wc -l)
-echo "    ✓ $PNEU_IMG_COUNT Pneumonia images copied"
+# Create symlink from home project/data -> scratch data
+ln -s "$SCRATCH_DATA_DIR" "$PROJECT_DIR/data"
+echo "    ✓ Symlinked: $PROJECT_DIR/data -> $SCRATCH_DATA_DIR"
 
 echo ""
 echo "Scratch disk usage:"
-du -sh "$SCRATCH_PROJECT_DIR"
+du -sh "$SCRATCH_DATA_DIR" 2>/dev/null || true
 echo ""
 
 # ============================================================================
@@ -231,15 +264,15 @@ EOF
 
 # Prepare Fibrosis dataset
 prepare_dataset "Fibrosis" \
-    "$SCRATCH_PROJECT_DIR/data/augmented_data/fibrosis" \
-    "$SCRATCH_PROJECT_DIR/data/processed/effusion_fibrosis/dataset.csv"
+    "$SCRATCH_DATA_DIR/augmented_data/fibrosis" \
+    "$SCRATCH_DATA_DIR/processed/effusion_fibrosis/dataset.csv"
 
 echo ""
 
 # Prepare Pneumonia dataset
 prepare_dataset "Pneumonia" \
-    "$SCRATCH_PROJECT_DIR/data/augmented_data/pneumonia" \
-    "$SCRATCH_PROJECT_DIR/data/processed/effusion_pneumonia/dataset.csv"
+    "$SCRATCH_DATA_DIR/augmented_data/pneumonia" \
+    "$SCRATCH_DATA_DIR/processed/effusion_pneumonia/dataset.csv"
 
 echo ""
 
@@ -281,11 +314,15 @@ SLURM Configuration:
   GPUs: ${SLURM_GPUS:-N/A}
   CPUs: ${SLURM_CPUS_PER_TASK:-N/A}
 
-Data Locations:
-  Scratch project: $SCRATCH_PROJECT_DIR
-  Fibrosis augmented: $SCRATCH_PROJECT_DIR/data/augmented_data/fibrosis
-  Pneumonia augmented: $SCRATCH_PROJECT_DIR/data/augmented_data/pneumonia
-  Output: $OUTPUT_DIR
+Data Sources:
+  Code: $PROJECT_DIR (home - run from here)
+  Data: $W_DATA_DIR (/w/ - original location)
+
+Layout:
+  Scratch Data: $SCRATCH_DATA_DIR (fast I/O)
+  Symlink: $PROJECT_DIR/data -> $SCRATCH_DATA_DIR
+
+Output: $OUTPUT_DIR
 EOF
 echo "✓ Environment info saved"
 echo ""
@@ -299,8 +336,14 @@ echo "==========================================================================
 echo "Start time: $(date)"
 echo ""
 
-# Change to scratch project directory (so relative paths work)
-cd "$SCRATCH_PROJECT_DIR"
+# Run from home project directory (code is here, data is symlinked to scratch)
+cd "$PROJECT_DIR"
+echo "Working directory: $(pwd)"
+echo ""
+
+# Verify data symlink works
+ls -la "$PROJECT_DIR/data" | head -1
+echo ""
 
 # Create runtime config with correct paths
 FIBROSIS_RUNTIME_CONFIG="$OUTPUT_DIR/config_fibrosis_runtime.yaml"
@@ -310,7 +353,7 @@ import yaml
 with open('$FIBROSIS_CONFIG', 'r') as f:
     config = yaml.safe_load(f)
 
-# Use relative paths (we're running from scratch project dir)
+# Use relative paths (symlink makes data/ available)
 config['data']['processed_dir'] = 'data/augmented_data/fibrosis'
 config['data']['interim_csv'] = 'data/interim/filtered_data_entry.csv'
 config['data']['train_val_dir'] = 'data/interim/train_val'
@@ -333,7 +376,7 @@ echo "Config: $FIBROSIS_RUNTIME_CONFIG"
 echo ""
 
 # Run training
-python "$TRAINING_SCRIPT" --config "$FIBROSIS_RUNTIME_CONFIG" \
+python scripts/train_classifier.py --config "$FIBROSIS_RUNTIME_CONFIG" \
     2>&1 | tee "$OUTPUT_DIR/fibrosis_training.log"
 
 FIBROSIS_EXIT_CODE=$?
@@ -366,7 +409,7 @@ import yaml
 with open('$PNEUMONIA_CONFIG', 'r') as f:
     config = yaml.safe_load(f)
 
-# Use relative paths (we're running from scratch project dir)
+# Use relative paths (symlink makes data/ available)
 config['data']['processed_dir'] = 'data/augmented_data/pneumonia'
 config['data']['interim_csv'] = 'data/interim/filtered_data_entry.csv'
 config['data']['train_val_dir'] = 'data/interim/train_val'
@@ -389,7 +432,7 @@ echo "Config: $PNEUMONIA_RUNTIME_CONFIG"
 echo ""
 
 # Run training
-python "$TRAINING_SCRIPT" --config "$PNEUMONIA_RUNTIME_CONFIG" \
+python scripts/train_classifier.py --config "$PNEUMONIA_RUNTIME_CONFIG" \
     2>&1 | tee "$OUTPUT_DIR/pneumonia_training.log"
 
 PNEUMONIA_EXIT_CODE=$?
@@ -406,11 +449,10 @@ echo "End time: $(date)"
 echo ""
 
 # ============================================================================
-# CLEANUP SCRATCH
+# CLEANUP (keep data symlink and scratch data for reuse)
 # ============================================================================
-echo "==> Cleaning up scratch space..."
-rm -rf "$SCRATCH_BASE/classifier_training_${JOB_ID}"
-echo "✓ Scratch space cleaned"
+echo "==> Scratch data preserved for reuse at: $SCRATCH_DATA_DIR"
+echo "    Data symlink remains: $PROJECT_DIR/data -> $SCRATCH_DATA_DIR"
 echo ""
 
 # ============================================================================

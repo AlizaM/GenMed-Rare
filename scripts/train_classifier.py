@@ -103,6 +103,32 @@ def main():
     train_loader, val_loader = create_dataloaders(config)
     logger.info(f"Train batches: {len(train_loader)}")
     logger.info(f"Val batches: {len(val_loader)}")
+
+    # Log class distribution
+    import pandas as pd
+    df = pd.read_csv(dataset_csv)
+    logger.info("-" * 40)
+    logger.info("CLASS DISTRIBUTION:")
+    for split in ['train', 'val', 'test']:
+        split_df = df[df['split'] == split]
+        if len(split_df) == 0:
+            continue
+        label_counts = split_df['label'].value_counts().sort_index()
+        neg_count = label_counts.get(0, 0)
+        pos_count = label_counts.get(1, 0)
+        logger.info(f"  {split.upper():5s}: {config.data.class_negative}={neg_count}, {config.data.class_positive}={pos_count}, Total={len(split_df)}")
+
+    # Log synthetic breakdown if available
+    train_df = df[df['split'] == 'train']
+    if 'is_synthetic' in train_df.columns:
+        synthetic_count = train_df['is_synthetic'].sum()
+        real_count = len(train_df) - synthetic_count
+        logger.info(f"  TRAIN source: Real={real_count}, Synthetic={synthetic_count}")
+    elif 'source' in train_df.columns:
+        synthetic_count = (train_df['source'] == 'synthetic').sum()
+        real_count = len(train_df) - synthetic_count
+        logger.info(f"  TRAIN source: Real={real_count}, Synthetic={synthetic_count}")
+    logger.info("-" * 40)
     
     # Create model
     logger.info("=" * 80)
