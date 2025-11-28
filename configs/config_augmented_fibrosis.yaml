@@ -1,0 +1,107 @@
+# Training Configuration for Augmented Fibrosis Classification
+# Uses real + synthetic generated Fibrosis images for training
+
+experiment:
+  name: "effusion_vs_fibrosis_augmented"
+  description: "Binary classification with synthetic Fibrosis augmentation"
+  seed: 42
+
+data:
+  # CLASSES CONFIGURATION
+  class_positive: "Fibrosis"   # Rare class (label=1)
+  class_negative: "Effusion"   # Common class (label=0)
+
+  # Input paths - these are used by preprocess.py (not needed for augmented training)
+  interim_csv: "data/interim/filtered_data_entry.csv"
+  train_val_dir: "data/interim/train_val"
+  test_dir: "data/interim/test"
+
+  # IMPORTANT: Point to augmented data directory
+  # The script will dynamically update this path at runtime
+  processed_dir: "data/augmented_data/fibrosis"
+  train_csv: "train.csv"
+  val_csv: "val.csv"
+  test_csv: "test.csv"
+
+  # Split configuration
+  train_val_split: 0.8
+  stratified: true
+
+  # Image configuration
+  image_size: [224, 224]  # [height, width]
+  channels: 3  # RGB (converted from grayscale)
+
+model:
+  name: "swin_transformer"
+  variant: "swin_base_patch4_window7_224"
+  pretrained: true
+  num_classes: 2
+  freeze_backbone: false
+  dropout: 0.1
+
+training:
+  batch_size: 64
+  num_epochs: 30
+  num_workers: 4
+
+  # Optimizer
+  optimizer: "adamw"
+  learning_rate: 0.0001
+  weight_decay: 0.01
+
+  # Learning rate scheduler
+  scheduler: "reduce_lr_on_plateau"
+  lr_patience: 5
+  lr_factor: 0.5
+  lr_min: 0.000001
+
+  # Early stopping
+  early_stopping: false
+  early_stopping_patience: 10
+  early_stopping_metric: "val_loss"
+
+  # Checkpointing
+  save_checkpoints: true
+  checkpoint_dir: "auto_generated"
+  save_best_only: false
+
+  # Logging
+  log_dir: "auto_generated"
+  log_interval: 10
+
+  # Mixed precision training
+  use_amp: true  # Enable for faster training
+
+augmentation:
+  # Training augmentations (medical imaging safe - no flips!)
+  train:
+    rotation_degrees: 10
+    brightness: 0.2
+    contrast: 0.2
+    gaussian_noise_std: 0.01
+
+  # Normalization (ImageNet stats for transfer learning)
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+  # Validation/test (no augmentation except normalization)
+  val_test:
+    normalize_only: true
+
+metrics:
+  track:
+    - "accuracy"
+    - "precision"
+    - "recall"
+    - "f1"
+    - "auc_roc"
+    - "confusion_matrix"
+
+  primary_metric: "f1"
+  primary_mode: "max"
+
+hardware:
+  device: "cuda"
+  pin_memory: true
+  deterministic: true

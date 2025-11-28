@@ -1,0 +1,27 @@
+Augmented Datasets Summary
+================================================================================
+
+FIBROSIS AUGMENTED DATASET
+----------------------------------------
+Output directory: data/augmented_data/fibrosis
+Total samples: 16397
+  Real: 14627
+  Generated: 1770
+Pathology confidence range: [0.5977, 0.6277]
+Mean confidence: 0.6216
+Class distribution:
+  Effusion: 13129 (13129 real + 0 gen)
+  Fibrosis: 3268 (1498 real + 1770 gen)
+
+PNEUMONIA AUGMENTED DATASET
+----------------------------------------
+Output directory: data/augmented_data/pneumonia
+Total samples: 15410
+  Real: 14210
+  Generated: 1200
+Pathology confidence range: [0.5212, 0.6408]
+Mean confidence: 0.5564
+Class distribution:
+  Effusion: 13048 (13048 real + 0 gen)
+  Pneumonia: 2362 (1162 real + 1200 gen)
+
