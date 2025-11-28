@@ -35,24 +35,26 @@ class AddGaussianNoise:
 class ChestXrayDataset(Dataset):
     """
     Dataset for chest X-ray binary classification.
-    
+
     Medical imaging considerations:
     - NO horizontal or vertical flips (orientation matters)
     - Grayscale images converted to RGB for pretrained models
     - Minimal augmentations: rotation, brightness, contrast, Gaussian noise
     """
-    
+
     def __init__(
         self,
         csv_path: Path,
         config: Config,
-        split: str = 'train'
+        split: str = 'train',
+        data_root: Optional[Path] = None
     ):
         """
         Args:
             csv_path: Path to unified CSV file with image paths, labels, and split column
             config: Configuration object
             split: Which split to use ('train', 'val', or 'test')
+            data_root: Optional root directory for data paths (replaces 'data/' prefix)
         """
         df_full = pd.read_csv(csv_path)
         # Filter for specific split
@@ -60,7 +62,8 @@ class ChestXrayDataset(Dataset):
         self.config = config
         self.split = split
         self.is_training = (split == 'train')
-        
+        self.data_root = data_root
+
         # Build transforms
         self.transform = self._build_transforms()
         
@@ -119,9 +122,11 @@ class ChestXrayDataset(Dataset):
             Tuple of (image_tensor, label)
         """
         row = self.df.iloc[idx]
-        
-        # Load image
+
+        # Load image - handle data_root override
         image_path = row['image_path']
+        if self.data_root and image_path.startswith('data/'):
+            image_path = str(self.data_root / image_path[5:])  # Remove 'data/' prefix
         image = Image.open(image_path)
         
         # Convert grayscale to RGB (for pretrained models)
@@ -153,29 +158,35 @@ class ChestXrayDataset(Dataset):
         return torch.FloatTensor(weights)
 
 
-def create_dataloaders(config: Config) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
+def create_dataloaders(
+    config: Config,
+    data_root: Optional[Path] = None
+) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     """
     Create train and validation dataloaders.
-    
+
     Args:
         config: Configuration object
-        
+        data_root: Optional root directory for data paths (replaces 'data/' prefix in image paths)
+
     Returns:
         Tuple of (train_loader, val_loader)
     """
-    # Path to unified dataset CSV
+    # Path to unified dataset CSV - try 'dataset.csv' first, then 'train_augmented.csv'
     dataset_csv = config.data.processed_dir / 'dataset.csv'
-    
+    if not dataset_csv.exists():
+        dataset_csv = config.data.processed_dir / 'train_augmented.csv'
+
     # Check if CSV exists
     if not dataset_csv.exists():
         raise FileNotFoundError(
-            f"Dataset CSV not found: {dataset_csv}\n"
-            f"Please run preprocessing first: python src/data/preprocess.py --config <config_path>"
+            f"Dataset CSV not found in {config.data.processed_dir}\n"
+            f"Looked for: dataset.csv, train_augmented.csv"
         )
-    
+
     # Create datasets for train and val splits
-    train_dataset = ChestXrayDataset(dataset_csv, config, split='train')
-    val_dataset = ChestXrayDataset(dataset_csv, config, split='val')
+    train_dataset = ChestXrayDataset(dataset_csv, config, split='train', data_root=data_root)
+    val_dataset = ChestXrayDataset(dataset_csv, config, split='val', data_root=data_root)
     
     # Create dataloaders
     train_loader = torch.utils.data.DataLoader(

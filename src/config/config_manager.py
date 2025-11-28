@@ -17,28 +17,25 @@ class ExperimentConfig:
 @dataclass
 class DataConfig:
     """Data paths and processing configuration."""
-    # Input paths
-    interim_csv: Path
-    train_val_dir: Path
-    test_dir: Path
-    
-    # Output paths
-    processed_dir: Path
-    train_csv: str
-    val_csv: str
-    test_csv: str
-    
     # Classes
     class_positive: str  # Rare class (label=1)
     class_negative: str  # Common class (label=0)
-    
+
+    # Output paths
+    processed_dir: Path
+
     # Split configuration
     train_val_split: float
     stratified: bool
-    
+
     # Image configuration
     image_size: List[int]
     channels: int
+
+    # Input paths (only used by preprocess.py, optional for training)
+    interim_csv: Path = None
+    train_val_dir: Path = None
+    test_dir: Path = None
 
 
 @dataclass
@@ -161,10 +158,13 @@ class Config:
         if not str(self.training.log_dir).startswith(base_output):
             self.training.log_dir = f"{base_output}/logs"
         
-        # Convert string paths to Path objects
-        self.data.interim_csv = Path(self.data.interim_csv)
-        self.data.train_val_dir = Path(self.data.train_val_dir)
-        self.data.test_dir = Path(self.data.test_dir)
+        # Convert string paths to Path objects (skip None values)
+        if self.data.interim_csv:
+            self.data.interim_csv = Path(self.data.interim_csv)
+        if self.data.train_val_dir:
+            self.data.train_val_dir = Path(self.data.train_val_dir)
+        if self.data.test_dir:
+            self.data.test_dir = Path(self.data.test_dir)
         self.data.processed_dir = Path(self.data.processed_dir)
         self.training.checkpoint_dir = Path(self.training.checkpoint_dir)
         self.training.log_dir = Path(self.training.log_dir)

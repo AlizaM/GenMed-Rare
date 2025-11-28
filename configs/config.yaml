@@ -8,7 +8,7 @@ experiment:
 
 data:
   # 🎯 CLASSES CONFIGURATION - CHANGE HERE TO SWITCH CLASSES
-  class_positive: "Pneumonia"  # Rare class (label=1) - Options: Fibrosis, Pneumonia, Cardiomegaly, etc.
+  class_positive: "Fibrosis"  # Rare class (label=1) - Options: Fibrosis, Pneumonia
   class_negative: "Effusion"   # Common class (label=0) - Options: Effusion, No Finding, etc.
   
   # Input paths
@@ -16,11 +16,6 @@ data:
   train_val_dir: "data/interim/train_val"
   test_dir: "data/interim/test"
   
-  # Output paths (auto-generated based on class names)
-  processed_dir: "auto_generated"  # Will become data/processed/{class_negative}_{class_positive}
-  train_csv: "train.csv"
-  val_csv: "val.csv"
-  test_csv: "test.csv"
   
   # Split configuration
   train_val_split: 0.8

@@ -272,7 +272,7 @@ class Trainer:
             
             if self.scaler is not None:
                 # Mixed precision training
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     outputs = self.model(images)
                     loss = self.criterion(outputs, labels)
                 

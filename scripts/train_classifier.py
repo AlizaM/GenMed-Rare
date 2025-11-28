@@ -65,7 +65,13 @@ def main():
         default=None,
         help='Path to checkpoint to resume training from'
     )
-    
+    parser.add_argument(
+        '--data-root',
+        type=str,
+        default=None,
+        help='Override data root directory (for scratch storage)'
+    )
+
     args = parser.parse_args()
     
     # Load configuration
@@ -74,10 +80,20 @@ def main():
     logger.info("=" * 80)
     config = load_config(args.config)
     
+    # Note: --data-root is used for IMAGE path resolution only
+    # The CSV files stay in home directory (processed_dir is NOT overridden)
+    # The data_root is passed to the dataset to redirect image paths from
+    # "data/interim/..." to "$SCRATCH/interim/..." etc.
+    if args.data_root:
+        logger.info(f"Image data root: {args.data_root}")
+        logger.info("  CSV files: from config (home directory)")
+        logger.info("  Image paths: redirected to data root")
+
     logger.info(f"Experiment: {config.experiment.name}")
     logger.info(f"Description: {config.experiment.description}")
     logger.info(f"Binary classification: {config.data.class_negative} (0) vs {config.data.class_positive} (1)")
     logger.info(f"Model: {config.model.variant}")
+    logger.info(f"Data dir: {config.data.processed_dir}")
     
     # Set random seed
     set_seed(config.experiment.seed)
@@ -85,22 +101,27 @@ def main():
     # Create output directories
     config.create_dirs()
     
-    # Check if preprocessing has been done
+    # Check if dataset CSV exists (try both names)
     dataset_csv = config.data.processed_dir / 'dataset.csv'
-    
+    if not dataset_csv.exists():
+        dataset_csv = config.data.processed_dir / 'train_augmented.csv'
+
     if not dataset_csv.exists():
         logger.error("=" * 80)
-        logger.error("PREPROCESSING REQUIRED")
+        logger.error("DATASET NOT FOUND")
         logger.error("=" * 80)
-        logger.error("Unified dataset CSV not found. Please run preprocessing first:")
-        logger.error(f"  python src/data/preprocess.py --config {args.config}")
+        logger.error(f"No dataset CSV found in: {config.data.processed_dir}")
+        logger.error("Looked for: dataset.csv, train_augmented.csv")
         return
-    
+
+    # Determine data_root for image path resolution
+    data_root = Path(args.data_root) if args.data_root else None
+
     # Create dataloaders
     logger.info("=" * 80)
     logger.info("LOADING DATA")
     logger.info("=" * 80)
-    train_loader, val_loader = create_dataloaders(config)
+    train_loader, val_loader = create_dataloaders(config, data_root=data_root)
     logger.info(f"Train batches: {len(train_loader)}")
     logger.info(f"Val batches: {len(val_loader)}")
 

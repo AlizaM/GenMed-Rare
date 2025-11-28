@@ -1,18 +1,17 @@
 #!/bin/bash
 #SBATCH --job-name=train_aug_clf
 #SBATCH --partition=gpunodes
-#SBATCH --constraint=RTX_A4500
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=30G
-#SBATCH --time=8:00:00
+#SBATCH --time=12:00:00
 #SBATCH --mail-user=alizat@cs.toronto.edu
 #SBATCH --mail-type=ALL
 
 # ============================================================================
-# Train Classifiers on Augmented Data (Fibrosis + Pneumonia)
+# Train Augmented Classifiers
 # ============================================================================
-# Simple script: finds scratch, copies data, runs training from home dir
+# Uses data directly from /w/ (no scratch copy)
 # ============================================================================
 
 set -e
@@ -25,11 +24,8 @@ W_DATA_DIR="/w/20251/alizat/data"
 VENV_LOCATION_FILE="$PROJECT_DIR/.scratch_venv_location"
 
 JOB_ID="${SLURM_JOB_ID:-local}"
-OUTPUT_DIR="/w/20251/alizat/classifier_outputs/augmented_training_${JOB_ID}"
+OUTPUT_DIR="/w/20251/alizat/classifier_outputs/augmented_${JOB_ID}"
 
-# ============================================================================
-# PRE-FLIGHT CHECKS
-# ============================================================================
 echo "============================================================================"
 echo "Training Augmented Classifiers"
 echo "============================================================================"
@@ -38,7 +34,9 @@ echo "Node: $(hostname)"
 echo "Date: $(date)"
 echo ""
 
-# Check venv
+# ============================================================================
+# CHECK VENV
+# ============================================================================
 if [ ! -f "$VENV_LOCATION_FILE" ]; then
     echo "ERROR: Venv location file not found: $VENV_LOCATION_FILE"
     exit 1
@@ -52,34 +50,7 @@ echo "Venv: $VENV_DIR"
 
 # GPU info
 echo ""
-echo "GPU:"
 nvidia-smi --query-gpu=gpu_name,memory.total --format=csv,noheader
-echo ""
-
-# ============================================================================
-# FIND SCRATCH AND COPY DATA
-# ============================================================================
-SCRATCH_BASE="/scratch/scratch-space"
-LATEST_SCRATCH=$(ls -td $SCRATCH_BASE/expires-* 2>/dev/null | head -1)
-
-if [ -z "$LATEST_SCRATCH" ]; then
-    echo "ERROR: No scratch directory found"
-    exit 1
-fi
-
-SCRATCH_DATA="$LATEST_SCRATCH/classifier_data"
-echo "Scratch: $SCRATCH_DATA"
-
-# Copy data to scratch if not present
-if [ -d "$SCRATCH_DATA/interim" ] && [ -d "$SCRATCH_DATA/processed" ]; then
-    echo "Data already on scratch, reusing"
-else
-    echo "Copying data to scratch..."
-    mkdir -p "$SCRATCH_DATA"
-    cp -r "$W_DATA_DIR/interim" "$SCRATCH_DATA/"
-    cp -r "$W_DATA_DIR/processed" "$SCRATCH_DATA/"
-    echo "Done"
-fi
 echo ""
 
 # ============================================================================
@@ -91,19 +62,49 @@ echo "Python: $(which python)"
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
 
+cd "$PROJECT_DIR"
+
+# ============================================================================
+# VERIFY DATA
+# ============================================================================
+echo ""
+echo "Using data from: $W_DATA_DIR"
+IMAGE_COUNT=$(find "$W_DATA_DIR/interim" -name "*.png" 2>/dev/null | wc -l)
+echo "Total images: $IMAGE_COUNT"
+
+# Check CSV exists in home
+CSV_PATH="$PROJECT_DIR/data/processed/effusion_fibrosis/dataset.csv"
+if [ ! -f "$CSV_PATH" ]; then
+    echo "ERROR: CSV not found: $CSV_PATH"
+    exit 1
+fi
+echo "CSV: $CSV_PATH"
+
+# Show CSV stats
+echo ""
+echo "CSV stats:"
+python3 -c "
+import pandas as pd
+df = pd.read_csv('$CSV_PATH')
+print(f'Total rows: {len(df)}')
+print(f'Train: {len(df[df.split==\"train\"])}')
+print(f'  Effusion: {len(df[(df.split==\"train\") & (df.label==0)])}')
+print(f'  Fibrosis: {len(df[(df.split==\"train\") & (df.label==1)])}')
+if 'source' in df.columns:
+    print(f'  Generated: {len(df[(df.split==\"train\") & (df.source==\"generated\")])}')
+"
+echo ""
+
 # ============================================================================
 # TRAIN FIBROSIS CLASSIFIER
 # ============================================================================
-echo ""
 echo "============================================================================"
 echo "Training Fibrosis Classifier"
 echo "============================================================================"
 
-cd "$PROJECT_DIR"
-
 python scripts/train_classifier.py \
     --config configs/config_augmented_fibrosis.yaml \
-    --data-root "$SCRATCH_DATA" \
+    --data-root "$W_DATA_DIR" \
     2>&1 | tee "$OUTPUT_DIR/fibrosis_training.log"
 
 FIBROSIS_EXIT=$?
@@ -119,7 +120,7 @@ echo "==========================================================================
 
 python scripts/train_classifier.py \
     --config configs/config_augmented_pneumonia.yaml \
-    --data-root "$SCRATCH_DATA" \
+    --data-root "$W_DATA_DIR" \
     2>&1 | tee "$OUTPUT_DIR/pneumonia_training.log"
 
 PNEUMONIA_EXIT=$?
