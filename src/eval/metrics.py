@@ -457,8 +457,9 @@ def load_torchxrayvision_model(device: str = "cuda"):
             "Install it with: pip install torchxrayvision"
         )
     
-    print("Loading TorchXRayVision model...")
+    logger.info("Loading TorchXRayVision model...")
     model = xrv.models.DenseNet(weights="densenet121-res224-all")
+    logger.info(f"Model applies sigmoid internally: {model.apply_sigmoid}")
     model = model.to(device)
     model.eval()
     return model
@@ -590,7 +591,11 @@ def compute_pathology_confidence(
         with torch.no_grad():
             outputs = xrv_model(batch_tensor)
             # Get probability for target pathology
-            probs = torch.sigmoid(outputs[:, pathology_idx])
+            # Only apply sigmoid if model doesn't already apply it internally
+            if xrv_model.apply_sigmoid:
+                probs = outputs[:, pathology_idx]
+            else:
+                probs = torch.sigmoid(outputs[:, pathology_idx])
             confidences.extend(probs.cpu().numpy().tolist())
     
     confidences = np.array(confidences)
@@ -839,7 +844,11 @@ def compute_diversity_metrics(
         
         with torch.no_grad():
             outputs = xrv_model(batch_tensor)
-            probs = torch.sigmoid(outputs)
+            # Only apply sigmoid if model doesn't already apply it internally
+            if xrv_model.apply_sigmoid:
+                probs = outputs
+            else:
+                probs = torch.sigmoid(outputs)
             all_probs.append(probs.cpu().numpy())
     
     # Shape: (num_images, num_pathologies)
