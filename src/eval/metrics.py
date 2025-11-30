@@ -592,10 +592,10 @@ def compute_pathology_confidence(
             outputs = xrv_model(batch_tensor)
             # Get probability for target pathology
             # Only apply sigmoid if model doesn't already apply it internally
-            if xrv_model.apply_sigmoid:
-                probs = outputs[:, pathology_idx]
-            else:
-                probs = torch.sigmoid(outputs[:, pathology_idx])
+            # if xrv_model.apply_sigmoid:
+            probs = outputs[:, pathology_idx]
+            # else:
+            #     probs = torch.sigmoid(outputs[:, pathology_idx])
             confidences.extend(probs.cpu().numpy().tolist())
     
     confidences = np.array(confidences)
@@ -1034,18 +1034,26 @@ def compute_tsne_overlap(
     
     # Compute overlap score (using k-nearest neighbors)
     from scipy.spatial.distance import cdist
-    
+    from sklearn.neighbors import NearestNeighbors
+
     real_embeddings = embeddings[labels == 0]
     gen_embeddings = embeddings[labels == 1]
     
-    # For each generated point, find distance to nearest real point
-    distances = cdist(gen_embeddings, real_embeddings)
-    min_distances = np.min(distances, axis=1)
-    
-    # Overlap score: fraction of generated points within threshold of real points
-    # Use median distance as threshold
-    threshold = np.median(min_distances)
-    overlap_score = np.mean(min_distances <= threshold)
+    # 1. Fit NN on Real Data to find out how "tight" the real cluster is
+    # k=2 because the closest neighbor to a point is itself (distance 0), so we want the 2nd closest
+    nbrs_real = NearestNeighbors(n_neighbors=2, algorithm='ball_tree').fit(real_embeddings)
+    distances_real, _ = nbrs_real.kneighbors(real_embeddings)
+
+    # The "Manifold Radius" (epsilon) is the average distance between real data points
+    # distances_real[:, 1] ignores the 0-distance to itself
+    epsilon = np.mean(distances_real[:, 1]) 
+
+    # 2. Check how many Generated points fall inside this radius
+    nbrs_test = NearestNeighbors(n_neighbors=1, algorithm='ball_tree').fit(real_embeddings)
+    distances_gen, _ = nbrs_test.kneighbors(gen_embeddings)
+
+    # Overlap Score: Fraction of gen points that are "close enough" to be considered real
+    overlap_score = np.mean(distances_gen <= epsilon)
 
     # Build group counts dictionary
     group_counts = {
@@ -1059,8 +1067,9 @@ def compute_tsne_overlap(
         'tsne_embeddings': embeddings.tolist(),
         'labels': labels.tolist(),
         'overlap_score': float(overlap_score),
-        'mean_distance': float(np.mean(min_distances)),
-        'median_distance': float(np.median(min_distances)),
+        'mean_distance': float(np.mean(distances_gen)),
+        'median_distance': float(np.median(distances_gen)),
+        'manifold_radius': float(epsilon),
         'group_counts': group_counts,
     }
 
