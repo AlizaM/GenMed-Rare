@@ -108,8 +108,7 @@ python scripts/evaluate_diffusion_generation.py \
     --real-dir "${FIBROSIS_REAL}" \
     --label Fibrosis \
     --output-dir "${FIBROSIS_OUTPUT}" \
-    --preset "${PRESET}" \
-    --prompt-template "A chest X-ray showing {label}" \
+    --metrics novelty \
     --crop-border-pixels 10 \
     --healthy-images-dir "${HEALTHY}"
 
@@ -141,8 +140,7 @@ python scripts/evaluate_diffusion_generation.py \
     --real-dir "${PNEUMONIA_REAL}" \
     --label Pneumonia \
     --output-dir "${PNEUMONIA_OUTPUT}" \
-    --preset "${PRESET}" \
-    --prompt-template "A chest X-ray showing {label}" \
+    --metrics novelty \
     --crop-border-pixels 10 \
     --healthy-images-dir "${HEALTHY}"
 

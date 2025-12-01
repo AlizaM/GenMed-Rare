@@ -45,5 +45,5 @@ hardware:
 
 metrics:
   novelty_metric: "correlation"  # Options: "ssim" or "correlation"
-  visualize_top_k: 10
+  visualize_top_k: 5
   seed: 42

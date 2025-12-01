@@ -288,6 +288,7 @@ def main():
         tsne_perplexity=args.tsne_perplexity,
         tsne_n_iter=args.tsne_n_iter,
         crop_border_pixels=args.crop_border_pixels,
+        novelty_metric="correlation",
     )
     
     # Run evaluation

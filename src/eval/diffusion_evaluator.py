@@ -658,11 +658,11 @@ class DiffusionGenerationEvaluator:
                 # Create 2-row grid: top row = real, bottom row = generated
                 fig, axes = plt.subplots(2, top_k, figsize=(top_k * 3, 6))
 
-                for i, idx in enumerate(top_indices):
-                    gen_img = self.generated_images[idx]
-                    real_idx = nn_indices[idx]
+                for i, sorted_idx  in enumerate(top_indices):
+                    gen_img = self.generated_images[sorted_idx]
+                    real_idx = nn_indices[sorted_idx ]
                     real_img = self.real_images[real_idx]
-                    similarity_score = nn_similarity_scores[idx]  # Display similarity, not novelty
+                    similarity_score = nn_similarity_scores[sorted_idx]
 
                     # Top row: Real images
                     ax_real = axes[0, i] if top_k > 1 else axes[0]
@@ -675,7 +675,7 @@ class DiffusionGenerationEvaluator:
                     ax_gen.imshow(gen_img, cmap='gray')
                     ax_gen.axis('off')
                     metric_name = "SSIM" if self.novelty_metric == "ssim" else "Corr"
-                    ax_gen.set_title(f'Gen #{idx}\n{metric_name}={similarity_score:.3f}',
+                    ax_gen.set_title(f'Gen #{sorted_idx}\n{metric_name}={similarity_score:.3f}',
                                     fontsize=10, fontweight='bold')
 
                 # Add row labels

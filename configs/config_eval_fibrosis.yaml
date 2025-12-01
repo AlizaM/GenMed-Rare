@@ -70,10 +70,10 @@ hardware:
 # Evaluation metrics configuration
 metrics:
   # Novelty metric (similarity to training set)
-  novelty_metric: "ssim"  # Options: "ssim" or "correlation"
+  novelty_metric: "correlation"  # Options: "ssim" or "correlation"
   
   # Visualization settings
-  visualize_top_k: 10  # Number of most similar pairs to visualize
+  visualize_top_k: 5  # Number of most similar pairs to visualize
   
   # Random seed for reproducibility
   seed: 42
