@@ -1,12 +1,12 @@
 # GenMed-Rare
 
-A PyTorch-based medical computer vision project focused on improving rare disease classification through synthetic data augmentation. Uses Stable Diffusion with LoRA fine-tuning to generate synthetic chest X-rays for augmenting rare medical cases, with comprehensive binary classification experiments on the NIH Chest X-ray dataset.
+A PyTorch-based medical computer vision project focused on improving rare disease classification through synthetic data augmentation. The pipeline integrates two complementary generative approaches — Stable Diffusion with LoRA fine-tuning and a conditional GAN (cGAN) — to generate synthetic chest X-rays for rare pathology classes, with comprehensive binary and three-class classification experiments on the NIH ChestX-ray14 dataset.
 
 ## Project Overview
 
-This project addresses the challenge of medical image classification for rare diseases by synthesizing additional training data using generative models. The pipeline compares classification performance on rare cases (e.g., Fibrosis) vs common cases (e.g., Effusion) with and without synthetic data augmentation from diffusion models.
+This project addresses the challenge of medical image classification for rare diseases by synthesizing additional training data using generative models. The pipeline compares classification performance on rare cases (e.g., Fibrosis) vs common cases (e.g., Effusion) with and without synthetic data augmentation from both diffusion models and a conditional GAN, evaluating their downstream impact on rare-class sensitivity.
 
-## Current Implementation Status ✅
+## Current Implementation Status - Diffusion based augmentation (- Aliza) ✅
 
 ### ✅ Prior-based Diffusion Training
 - **Medical Model**: `danyalmalik/stable-diffusion-chest-xray` (pre-trained on chest X-rays)
@@ -42,6 +42,48 @@ This project addresses the challenge of medical image classification for rare di
 - **Performance Analysis**: Compare classification metrics with 0%, 10%, 25%, 50% synthetic augmentation
 - **Medical Safety**: Orientation-preserving augmentations (no horizontal/vertical flips)
 - **Statistical Rigor**: Multi-seed experiments with statistical significance testing
+
+## GAN-Based Rare-Class Augmentation (- Pujitha) ✅
+
+A complete adversarial augmentation pipeline has been added to complement the diffusion model by offering a more controlled, anatomy-preserving synthetic data strategy for rare pathologies.
+
+Conditional GAN Training for Rare Pathologies
+	•	Architecture: Lightweight convolutional cGAN
+	•	Conditioning: Class labels appended as channels
+	•	Training Dataset: Pure Fibrosis and Pneumonia cohorts (same as diffusion)
+	•	Output:
+	•	400 synthetic Fibrosis images
+	•	400 synthetic Pneumonia images
+	•	Total of 800 rare-class synthetic images for downstream augmentation
+
+Stabilization Techniques
+	•	One-sided label smoothing (y_real = 0.9)
+	•	Gradient clipping to prevent exploding gradients
+	•	Early stopping based on discriminator plateau
+	•	Mode-collapse monitoring via feature diversity tracking
+	•	Training logs confirm stable adversarial dynamics
+
+Feature-Space Validation
+	•	ResNet-50 embedding + t-SNE visualization
+	•	GAN samples partially overlap with real data manifold
+	•	Indicates realistic pathological support without drifting too far from the rare-class distribution
+
+Three-Class Downstream Evaluation
+
+A three-class Swin-T classifier (Fibrosis / Pneumonia / Effusion) was trained under three regimes:
+	1.	Baseline Cross-Entropy
+	2.	Tempered Class-Weighted Cross-Entropy
+	3.	GAN + Class-Weighted Cross-Entropy
+
+Key Results
+	•	Fibrosis recall improves significantly:
+	•	0.2644 → 0.3563 (with class weighting)
+	•	0.3563 → 0.4552 (with GAN augmentation)
+	•	Pneumonia recall remains more than double the baseline
+	•	Macro F1 remains competitive (0.5223)
+	•	Accuracy reduction modest (0.8252 → 0.7755)
+
+These results demonstrate that carefully regularized cGAN augmentation can meaningfully improve rare-class sensitivity, especially for Fibrosis.
 
 ## Repository Structure
 
@@ -124,6 +166,7 @@ GenMed-Rare/
 │   ├── create_test_dataset.py       # Create small test dataset
 │   └── test_training.py             # Quick classification training test
 │   └── diagnose_missing_images.py   # Debug missing image files
+    |__ gan_implementation.py        # Complete GAN based implementation of the project
 ├── tests/                     # Comprehensive pytest test suite (174 tests)
 │   ├── test_config.py        # Configuration management tests
 │   ├── test_dataloader.py    # Dataset and dataloader tests
@@ -353,6 +396,16 @@ python scripts/test_training_diffusion.py --no-training  # Diffusion setup valid
 python scripts/test_training.py                          # Classification training test
 python scripts/test_resume_demo.py                       # Checkpoint resume demo
 ```
+## GAN Training Quick Start
+```bash
+python scripts/gan_implementation.py \
+    --epochs 25 \
+    --batch-size 32 \
+    --output-dir outputs/cgan_rare_aug/
+```
+
+### Synthetic GAN augmented images will be saved to - outputs/cgan_rare_aug/samples/
+
 
 ## Key Features
 
