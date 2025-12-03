@@ -1,42 +1,43 @@
 # Core ML
 torch>=1.13.0
-torchvision
-numpy
-Pillow
+torchvision>=0.14.0
+numpy>=1.23
+Pillow>=9.0
 
 # Visualization
-matplotlib
-seaborn
+matplotlib>=3.5
+seaborn>=0.11
 
-# Utils
-PyYAML
-tqdm
-pandas
+# Utilities
+PyYAML>=6.0
+tqdm>=4.64
+pandas>=1.5
 
-# Computer Vision & Image Processing
-scikit-image
-scikit-learn
+# Computer vision / image processing
+scikit-image>=0.19
+scikit-learn>=1.1
 
-# Models
-timm
-torchxrayvision
+# Model helpers
+timm>=0.6
+torchxrayvision>=0.0.41
 
-# Medical Image Analysis
-# microsoft/BiomedVLP-CXR-BERT-specialized (loaded via transformers)
-hi-ml-multimodal  # BioViL for medical text-image alignment
+# Medical Text-Image alignment (optional - may require extra install instructions)
+# The project expects a BioViL-like package; if using the HI-ML implementation, install separately.
+hi-ml-multimodal
 
 # Logging
-tensorboard
+tensorboard>=2.12
 
 # Testing
-pytest
+pytest>=7.0
 
-# Diffusion Model Training
+# Diffusion stack
 diffusers>=0.25.0
 transformers>=4.36.0
-accelerate>=0.25.0
+accelerate>=0.18
 peft>=0.7.0
 bitsandbytes>=0.41.0
 
-# Diffusion Optimizations (optional - install manually if you have compatible CUDA)
-# xformers>=0.0.23      # For faster attention (requires compatible PyTorch + CUDA)
+# Optional performance packages (install manually if compatible with your CUDA/PyTorch)
+# xformers>=0.0.23    # Faster attention
+# triton>=2.0         # Optional for custom kernels
